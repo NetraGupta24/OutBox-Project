@@ -6,9 +6,15 @@ const envSchema = z.object({
   PORT: z.coerce.number().int().positive().default(4000),
   FRONTEND_URL: z.url().default('http://localhost:3000'),
 
-  DATABASE_URL: z.string().min(1),
+  DATABASE_URL: z.string().startsWith('mysql://'),
+  DB_POOL_SIZE: z.coerce.number().int().min(1).default(10),
   REDIS_URL: z.string().min(1).default('redis://localhost:6379'),
   ELASTICSEARCH_URL: z.url().default('http://localhost:9200'),
+
+  // 32-byte key (64 hex chars) for encrypting secrets at rest. Generate: openssl rand -hex 32
+  ENCRYPTION_KEY: z
+    .string()
+    .regex(/^[0-9a-fA-F]{64}$/, 'must be 64 hex characters (openssl rand -hex 32)'),
 
   // Scheduler tuning (used from phase 4 onwards)
   WORKER_CONCURRENCY: z.coerce.number().int().min(1).default(5),

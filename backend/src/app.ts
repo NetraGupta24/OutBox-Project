@@ -1,6 +1,7 @@
 import express, { type NextFunction, type Request, type Response } from 'express';
 import { redis } from './lib/redis.js';
 import { es } from './lib/elasticsearch.js';
+import { prisma } from './lib/prisma.js';
 
 async function check(fn: () => Promise<unknown>): Promise<'up' | 'down'> {
   try {
@@ -15,16 +16,16 @@ export function createApp() {
   const app = express();
   app.use(express.json({ limit: '2mb' }));
 
-  // MySQL is added to this check in phase 2, once Prisma is in place.
   app.get('/health', async (_req, res) => {
-    const [redisStatus, esStatus] = await Promise.all([
+    const [mysqlStatus, redisStatus, esStatus] = await Promise.all([
+      check(() => prisma.$queryRaw`SELECT 1`),
       check(() => redis.ping()),
       check(() => es.ping()),
     ]);
-    const ok = redisStatus === 'up' && esStatus === 'up';
+    const ok = mysqlStatus === 'up' && redisStatus === 'up' && esStatus === 'up';
     res.status(ok ? 200 : 503).json({
       status: ok ? 'ok' : 'degraded',
-      services: { redis: redisStatus, elasticsearch: esStatus },
+      services: { mysql: mysqlStatus, redis: redisStatus, elasticsearch: esStatus },
       uptime: Math.round(process.uptime()),
     });
   });

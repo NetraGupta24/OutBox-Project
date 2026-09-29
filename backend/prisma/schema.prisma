@@ -1,0 +1,132 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "mysql"
+}
+
+// All DateTime columns are stored in UTC with millisecond precision.
+
+model User {
+  id        Int      @id @default(autoincrement())
+  googleId  String   @unique @map("google_id") @db.VarChar(64)
+  email     String   @unique @db.VarChar(320)
+  name      String   @db.VarChar(255)
+  avatarUrl String?  @map("avatar_url") @db.VarChar(1024)
+  createdAt DateTime @default(now()) @map("created_at") @db.DateTime(3)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.DateTime(3)
+
+  senders          Sender[]
+  campaigns        Campaign[]
+  emails           Email[]
+  slackIntegration SlackIntegration?
+
+  @@map("users")
+}
+
+// An SMTP account emails are sent from. user_id NULL means the sender is
+// shared by all users (the seeded Ethereal accounts).
+model Sender {
+  id          Int      @id @default(autoincrement())
+  userId      Int?     @map("user_id")
+  email       String   @unique @db.VarChar(320)
+  displayName String   @map("display_name") @db.VarChar(255)
+  smtpHost    String   @map("smtp_host") @db.VarChar(255)
+  smtpPort    Int      @map("smtp_port")
+  smtpSecure  Boolean  @default(false) @map("smtp_secure")
+  smtpUser    String   @map("smtp_user") @db.VarChar(320)
+  smtpPassEnc String   @map("smtp_pass_enc") @db.Text
+  // Overrides MAX_EMAILS_PER_HOUR_PER_SENDER when set.
+  hourlyLimit Int?     @map("hourly_limit")
+  isActive    Boolean  @default(true) @map("is_active")
+  createdAt   DateTime @default(now()) @map("created_at") @db.DateTime(3)
+  updatedAt   DateTime @updatedAt @map("updated_at") @db.DateTime(3)
+
+  user      User?      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  campaigns Campaign[]
+  emails    Email[]
+
+  @@index([userId])
+  @@map("senders")
+}
+
+// One "Compose" submission: shared subject/body and scheduling settings.
+model Campaign {
+  id             Int      @id @default(autoincrement())
+  userId         Int      @map("user_id")
+  senderId       Int      @map("sender_id")
+  subject        String   @db.VarChar(255)
+  bodyHtml       String   @map("body_html") @db.MediumText
+  bodyText       String   @map("body_text") @db.Text
+  startAt        DateTime @map("start_at") @db.DateTime(3)
+  delayMs        Int      @map("delay_ms")
+  hourlyLimit    Int      @map("hourly_limit")
+  total          Int
+  // Client-supplied key so a double-clicked "Schedule" creates one campaign.
+  idempotencyKey String?  @map("idempotency_key") @db.VarChar(100)
+  createdAt      DateTime @default(now()) @map("created_at") @db.DateTime(3)
+
+  user   User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  sender Sender  @relation(fields: [senderId], references: [id])
+  emails Email[]
+
+  @@unique([userId, idempotencyKey])
+  @@index([userId, createdAt])
+  @@map("campaigns")
+}
+
+enum EmailStatus {
+  scheduled
+  delayed
+  sending
+  sent
+  failed
+}
+
+// One recipient of a campaign. This row is the source of truth; the BullMQ
+// job for it uses jobId "email-<id>".
+model Email {
+  id          Int         @id @default(autoincrement())
+  campaignId  Int         @map("campaign_id")
+  userId      Int         @map("user_id")
+  senderId    Int         @map("sender_id")
+  recipient   String      @db.VarChar(320)
+  subject     String      @db.VarChar(255)
+  scheduledAt DateTime    @map("scheduled_at") @db.DateTime(3)
+  status      EmailStatus @default(scheduled)
+  attempts    Int         @default(0)
+  lockedAt    DateTime?   @map("locked_at") @db.DateTime(3)
+  sentAt      DateTime?   @map("sent_at") @db.DateTime(3)
+  messageId   String?     @map("message_id") @db.VarChar(255)
+  previewUrl  String?     @map("preview_url") @db.VarChar(1024)
+  error       String?     @db.Text
+  createdAt   DateTime    @default(now()) @map("created_at") @db.DateTime(3)
+  updatedAt   DateTime    @updatedAt @map("updated_at") @db.DateTime(3)
+
+  campaign Campaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  sender   Sender   @relation(fields: [senderId], references: [id])
+
+  @@unique([campaignId, recipient])
+  @@index([userId, status, scheduledAt])
+  @@index([status, scheduledAt])
+  @@index([senderId])
+  @@map("emails")
+}
+
+model SlackIntegration {
+  id            Int       @id @default(autoincrement())
+  userId        Int       @unique @map("user_id")
+  teamId        String    @map("team_id") @db.VarChar(64)
+  teamName      String    @map("team_name") @db.VarChar(255)
+  channel       String    @db.VarChar(255)
+  webhookUrlEnc String    @map("webhook_url_enc") @db.Text
+  connectedAt   DateTime  @default(now()) @map("connected_at") @db.DateTime(3)
+  revokedAt     DateTime? @map("revoked_at") @db.DateTime(3)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("slack_integrations")
+}

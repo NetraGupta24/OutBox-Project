@@ -10,20 +10,32 @@
     "start:api": "node dist/server.js",
     "start:worker": "node dist/worker.js",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "lint": "eslint src"
+    "lint": "eslint src",
+    "db:generate": "prisma generate",
+    "db:migrate": "prisma migrate dev",
+    "db:deploy": "prisma migrate deploy",
+    "db:studio": "prisma studio",
+    "seed:senders": "tsx src/scripts/seedSenders.ts",
+    "postinstall": "prisma generate"
   },
   "dependencies": {
     "@elastic/elasticsearch": "^8.19.2",
+    "@prisma/adapter-mariadb": "^7.10.0",
+    "@prisma/client": "^7.10.0",
     "dotenv": "^18.0.4",
     "express": "^5.2.1",
     "ioredis": "^5.11.1",
+    "mariadb": "^3.5.4",
+    "nodemailer": "^10.0.12",
     "zod": "^4.6.5"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.5",
     "@types/express": "^5.0.6",
     "@types/node": "^22.20.4",
+    "@types/nodemailer": "^8.0.2",
     "eslint": "^9.39.5",
+    "prisma": "^7.10.0",
     "tsx": "^4.23.15",
     "typescript": "^5.9.3",
     "typescript-eslint": "^8.71.0"
