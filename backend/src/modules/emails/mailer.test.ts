@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { errorMessage, isPermanentFailure } from './mailer.js';
+import { isPermanentFailure } from './mailer.js';
+import { errorMessage } from '../../lib/errors.js';
 
 describe('isPermanentFailure', () => {
   it('treats 5xx SMTP replies as permanent', () => {

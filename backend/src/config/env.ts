@@ -1,6 +1,12 @@
 import 'dotenv/config';
 import { z } from 'zod';
 
+// Empty values in .env count as "not set".
+const optionalString = z
+  .string()
+  .optional()
+  .transform((v) => v?.trim() || undefined);
+
 const envSchema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
   PORT: z.coerce.number().int().positive().default(4000),
@@ -16,12 +22,18 @@ const envSchema = z.object({
     .string()
     .regex(/^[0-9a-fA-F]{64}$/, 'must be 64 hex characters (openssl rand -hex 32)'),
 
-  // TEMPORARY until Google login (phase 6): identify API callers by the
-  // x-dev-user-email header. Ignored when NODE_ENV=production.
-  AUTH_DEV_BYPASS: z
-    .enum(['true', 'false'])
-    .default('false')
-    .transform((v) => v === 'true'),
+  // Signs session cookies. Generate: openssl rand -hex 32
+  JWT_SECRET: z.string().min(32, 'must be at least 32 characters (openssl rand -hex 32)'),
+  // Google OAuth client (Google Cloud Console > APIs & Services > Credentials).
+  // Without them the API still runs, but sign-in answers 503.
+  GOOGLE_CLIENT_ID: optionalString,
+  GOOGLE_CLIENT_SECRET: optionalString,
+  // Must match an Authorized redirect URI of the OAuth client.
+  // Default: FRONTEND_URL + /api/auth/google/callback (through the Next.js proxy).
+  GOOGLE_CALLBACK_URL: z
+    .union([z.literal(''), z.url()])
+    .optional()
+    .transform((v) => v || undefined),
 
   // Bull Board queue dashboard at /admin/queues (HTTP Basic auth). Disabled without a password.
   BULL_BOARD_USERNAME: z.string().min(1).default('admin'),
@@ -54,5 +66,9 @@ if (!parsed.success) {
   process.exit(1);
 }
 
-export const env = parsed.data;
+export const env = {
+  ...parsed.data,
+  GOOGLE_CALLBACK_URL:
+    parsed.data.GOOGLE_CALLBACK_URL ?? `${parsed.data.FRONTEND_URL}/api/auth/google/callback`,
+};
 export type Env = typeof env;

@@ -1,6 +1,6 @@
 import { Worker, type Job } from 'bullmq';
 import { createRedisConnection } from '../lib/redis.js';
-import { errorMessage } from '../modules/emails/mailer.js';
+import { errorMessage } from '../lib/errors.js';
 import { NOTIFICATION_QUEUE, type NotificationJobData } from '../queue/queues.js';
 
 function describe(event: NotificationJobData): string {

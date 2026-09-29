@@ -39,8 +39,11 @@ npm run infra:up
 cp backend/.env.example backend/.env
 cp frontend/.env.example frontend/.env.local
 # then, in backend/.env:
-#   ENCRYPTION_KEY       output of: openssl rand -hex 32
-#   BULL_BOARD_PASSWORD  any password of 8+ characters, for the queue dashboard
+#   ENCRYPTION_KEY        output of: openssl rand -hex 32
+#   JWT_SECRET            output of: openssl rand -hex 32
+#   GOOGLE_CLIENT_ID      see "Google sign-in setup" below
+#   GOOGLE_CLIENT_SECRET
+#   BULL_BOARD_PASSWORD   any password of 8+ characters, for the queue dashboard
 
 # 4. Create the database tables
 npm run db:migrate -w backend
@@ -54,7 +57,7 @@ npm run dev:worker   # BullMQ worker process
 npm run dev:web      # Dashboard on http://localhost:3000
 ```
 
-Check that everything is connected: `curl http://localhost:4000/health` (reports MySQL, Redis and Elasticsearch), or open http://localhost:3000.
+Open http://localhost:3000 and sign in with Google. To check the services: `curl http://localhost:4000/health` (reports MySQL, Redis and Elasticsearch).
 
 The frontend proxies `/api/*` and `/admin/queues` to the backend (see `frontend/next.config.ts`), so the browser only talks to one origin.
 
@@ -68,6 +71,27 @@ Bull Board shows the email queue live (delayed, waiting, active, completed and f
 - **Elasticsearch** runs as a single node with security disabled and a 512 MB heap, for local development only.
 - **MySQL** runs `docker/mysql/init.sql` when its volume is first created. It lets the app user create the temporary database `prisma migrate dev` needs.
 - All data lives in named Docker volumes. `npm run infra:down` stops the containers and keeps the data.
+
+## Google sign-in setup
+
+1. In [Google Cloud Console](https://console.cloud.google.com/), create a project (or pick one).
+2. **APIs & Services → OAuth consent screen**: choose **External**, fill in the app name and your email. While the app is in _Testing_, add the Google accounts that may sign in under **Test users**.
+3. **APIs & Services → Credentials → Create credentials → OAuth client ID**, type **Web application**:
+   - Authorized JavaScript origins: `http://localhost:3000`
+   - Authorized redirect URIs: `http://localhost:3000/api/auth/google/callback`
+4. Copy the client ID and secret into `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` in `backend/.env`, and restart the API.
+
+The redirect URI points at the frontend because the frontend proxies `/api/*` to the backend: the session cookie is then set for the site the browser is on. If you serve the app elsewhere, set `FRONTEND_URL` and add the matching redirect URI (or set `GOOGLE_CALLBACK_URL`).
+
+**How sign-in works.** The backend runs Google's OAuth 2.0 authorization-code flow:
+
+- A signed, 10-minute cookie carries a random `state` value (against forged sign-in callbacks) and a PKCE verifier.
+- The code is exchanged server-side, and Google's ID token is verified (signature, audience, expiry). The email must be verified.
+- The user is created, or updated with the latest name and photo, then gets a 7-day session: a signed JWT in an `httpOnly`, `SameSite=Lax` cookie.
+- Page scripts can't read the cookie, and browsers don't send it on cross-site POSTs; together with JSON-only request bodies, that protects the API from CSRF.
+- Logging out clears the cookie. Pages under the app check the session with the backend and send signed-out visitors to `/login`.
+
+The login page shows the email and password fields from the design, disabled: only Google sign-in is supported.
 
 ## Ethereal setup
 
@@ -96,12 +120,16 @@ All times are stored in UTC.
 
 ## API
 
-All `/api/*` routes are scoped to the signed-in user.
+All `/api/*` routes except sign-in need the session cookie, and only ever return the signed-in user's data (401 without a valid session).
 
-> **Temporary until Google login (phase 6):** with `AUTH_DEV_BYPASS=true` (ignored in production), send an `x-dev-user-email` header to act as that user. The user is created on first use.
+To call the API from curl or Postman: sign in at http://localhost:3000, copy the `rb_session` cookie (browser dev tools → Application → Cookies), and send it as a `Cookie` header.
 
 | Method | Path                                                    | Purpose                                                            |
 | ------ | ------------------------------------------------------- | ------------------------------------------------------------------ |
+| GET    | `/api/auth/google`                                      | Start Google sign-in (optional `?returnTo=/sent`)                  |
+| GET    | `/api/auth/google/callback`                             | Where Google sends the browser back                                |
+| GET    | `/api/auth/me`                                          | The signed-in user (name, email, avatar)                           |
+| POST   | `/api/auth/logout`                                      | Sign out (clears the session cookie)                               |
 | POST   | `/api/campaigns`                                        | Schedule one email per recipient. Send an `Idempotency-Key` header |
 | POST   | `/api/campaigns/preview`                                | Projected start/finish time for a campaign, without saving         |
 | GET    | `/api/emails?status=scheduled\|sent&page=1&pageSize=25` | Scheduled or Sent list, paginated                                  |
@@ -113,9 +141,9 @@ All `/api/*` routes are scoped to the signed-in user.
 Example:
 
 ```bash
-curl -X POST http://localhost:4000/api/campaigns \
+curl -X POST http://localhost:3000/api/campaigns \
   -H 'content-type: application/json' \
-  -H 'x-dev-user-email: you@example.com' \
+  -H 'cookie: rb_session=<value from your browser>' \
   -H 'idempotency-key: compose-2f9c1a7e' \
   -d '{
     "senderId": 1,
@@ -221,7 +249,7 @@ To see it: schedule a few emails a minute apart, stop the API and worker, wait u
 | `npm run db:studio -w backend`        | Opens Prisma Studio to browse the database                               |
 | `npm run seed:senders -w backend`     | Creates or updates the Ethereal senders                                  |
 
-Integration tests use their own database (`reachinbox_test`, created and migrated automatically) and Redis database 15, so they never touch development data. They cover the rate limiter (limits, spacing, order, 200 parallel reservations), duplicate-request handling, the send claim race, and job reconciliation.
+Integration tests use their own database (`reachinbox_test`, created and migrated automatically) and Redis database 15, so they never touch development data. They cover Google sign-in (state and PKCE, callback errors, safe return paths, sessions, logout; only the call to Google's token endpoint is faked), the rate limiter (limits, spacing, order, 200 parallel reservations), duplicate-request handling, the send claim race, and job reconciliation.
 
 ## Progress
 
@@ -232,7 +260,7 @@ Integration tests use their own database (`reachinbox_test`, created and migrate
 | 3   | Core scheduling API                | Done        |
 | 4   | Email worker and persistence       | Done        |
 | 5   | Rate limiting and concurrency      | Done        |
-| 6   | Google authentication              | Not started |
+| 6   | Google authentication              | Done        |
 | 7   | Frontend dashboard                 | Not started |
 | 8   | Slack and Elasticsearch            | Not started |
 | 9   | Documentation, demo and submission | Not started |

@@ -1,4 +1,5 @@
 import express, { type NextFunction, type Request, type Response } from 'express';
+import cookieParser from 'cookie-parser';
 import { redis } from './lib/redis.js';
 import { es } from './lib/elasticsearch.js';
 import { prisma } from './lib/prisma.js';
@@ -6,6 +7,8 @@ import { HttpError } from './lib/httpError.js';
 import { withTimeout } from './lib/async.js';
 import { env } from './config/env.js';
 import { requireAuth } from './modules/auth/requireAuth.js';
+import { authRouter } from './modules/auth/auth.routes.js';
+import { googleConfigured } from './modules/auth/google.js';
 import { BULL_BOARD_PATH, basicAuth, bullBoardRouter } from './modules/admin/bullBoard.js';
 import { campaignRouter } from './modules/campaigns/campaign.routes.js';
 import { emailRouter } from './modules/emails/email.routes.js';
@@ -25,7 +28,9 @@ async function check(fn: () => Promise<unknown>): Promise<'up' | 'down'> {
 
 export function createApp() {
   const app = express();
+  app.disable('x-powered-by');
   app.use(express.json({ limit: '2mb' }));
+  app.use(cookieParser());
 
   app.get('/health', async (_req, res) => {
     const [mysqlStatus, redisStatus, esStatus] = await Promise.all([
@@ -50,6 +55,11 @@ export function createApp() {
   } else {
     console.warn(`Queue dashboard disabled: set BULL_BOARD_PASSWORD to enable ${BULL_BOARD_PATH}`);
   }
+
+  if (!googleConfigured()) {
+    console.warn('Google sign-in disabled: set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET');
+  }
+  app.use('/api/auth', authRouter);
 
   app.use('/api', requireAuth);
   app.use('/api/campaigns', campaignRouter);

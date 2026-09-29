@@ -13,7 +13,8 @@ import {
   setDeliveryMarker,
   type Delivery,
 } from '../modules/emails/email.state.js';
-import { deliver, errorMessage, isPermanentFailure } from '../modules/emails/mailer.js';
+import { deliver, isPermanentFailure } from '../modules/emails/mailer.js';
+import { errorMessage } from '../lib/errors.js';
 import { reserveSendSlot } from '../modules/rateLimit/rateLimiter.js';
 import { reportLimitReached } from '../modules/rateLimit/limitEvents.js';
 import { senderHourlyLimit } from '../modules/senders/sender.service.js';

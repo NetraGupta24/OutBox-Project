@@ -1,9 +1,10 @@
 import type { NextFunction, Request, Response } from 'express';
-import { env } from '../../config/env.js';
 import { prisma } from '../../lib/prisma.js';
 import { unauthorized } from '../../lib/httpError.js';
+import { SESSION_COOKIE, readSessionToken } from './session.js';
+import { toAuthUser, type AuthUser } from './user.service.js';
 
-export type AuthUser = { id: number; email: string; name: string; avatarUrl: string | null };
+export type { AuthUser };
 
 declare module 'express-serve-static-core' {
   interface Request {
@@ -11,27 +12,19 @@ declare module 'express-serve-static-core' {
   }
 }
 
-/**
- * TEMPORARY until phase 6 (Google OAuth): when AUTH_DEV_BYPASS=true outside
- * production, the caller is identified by the `x-dev-user-email` header
- * (default dev@example.com) and that user is created on first use.
- */
-async function devUser(req: Request): Promise<AuthUser> {
-  const email = (req.header('x-dev-user-email') ?? 'dev@example.com').trim().toLowerCase();
-  const user = await prisma.user.upsert({
-    where: { email },
-    create: { email, googleId: `dev:${email}`, name: email.split('@')[0] ?? email },
-    update: {},
-  });
-  return { id: user.id, email: user.email, name: user.name, avatarUrl: user.avatarUrl };
-}
-
+// Accepts a request only with a valid session cookie for an existing user.
 export async function requireAuth(req: Request, _res: Response, next: NextFunction) {
-  if (env.AUTH_DEV_BYPASS && env.NODE_ENV !== 'production') {
-    req.user = await devUser(req);
-    return next();
-  }
-  throw unauthorized();
+  const token: unknown = req.cookies?.[SESSION_COOKIE];
+  if (typeof token !== 'string' || !token) throw unauthorized();
+
+  const userId = await readSessionToken(token);
+  if (!userId) throw unauthorized('Session expired, please sign in again');
+
+  const user = await prisma.user.findUnique({ where: { id: userId } });
+  if (!user) throw unauthorized();
+
+  req.user = toAuthUser(user);
+  next();
 }
 
 // For handlers mounted behind requireAuth.

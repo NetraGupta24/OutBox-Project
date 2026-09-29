@@ -3,6 +3,10 @@ import type { NextConfig } from 'next';
 const backendUrl = process.env.BACKEND_URL ?? 'http://localhost:4000';
 
 const nextConfig: NextConfig = {
+  images: {
+    // Google profile photos
+    remotePatterns: [new URL('https://lh3.googleusercontent.com/**')],
+  },
   // Proxy API calls to Express so the browser sees one origin.
   // This keeps the session cookie first-party and avoids CORS.
   async rewrites() {
