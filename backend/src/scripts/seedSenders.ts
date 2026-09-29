@@ -8,9 +8,14 @@
  * Safe to re-run: senders are upserted by email, and new accounts are only
  * created when fewer than SEED_SENDER_COUNT shared senders exist.
  */
-import nodemailer from 'nodemailer';
 import { prisma } from '../lib/prisma.js';
 import { encrypt, decrypt } from '../lib/crypto.js';
+
+// Nodemailer caches the first test account and hands it back on every later
+// createTestAccount() call, which would store one account several times.
+// The flag is read when nodemailer loads, so set it before importing.
+process.env.ETHEREAL_CACHE = 'no';
+const { default: nodemailer } = await import('nodemailer');
 
 const ETHEREAL_HOST = 'smtp.ethereal.email';
 const ETHEREAL_PORT = 587;
@@ -32,6 +37,9 @@ async function createAccounts(count: number): Promise<Account[]> {
   try {
     for (let i = 0; i < count; i++) {
       const account = await nodemailer.createTestAccount();
+      if (accounts.some((a) => a.user === account.user)) {
+        throw new Error(`got ${account.user} twice`);
+      }
       accounts.push({ user: account.user, pass: account.pass });
     }
   } catch (err) {
