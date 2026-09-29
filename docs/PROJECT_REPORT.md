@@ -144,14 +144,21 @@ sequenceDiagram
 
 ## 5. Phase-wise Architecture (build order)
 
-| Phase | Goal | Architecture added | Exit criterion |
-|---|---|---|---|
-| **P0 Foundation** | Skeleton that boots | Monorepo `backend/` + `frontend/`, `docker-compose` (MySQL 8, Redis 7 with AOF, ES 8 single-node), env validation with zod, Prisma schema and migrations, Ethereal sender seed script | `docker compose up` + `npm run dev` both start |
-| **P1 Core scheduler** | Schedule → send → persist | Campaign API, BullMQ queue and worker, Nodemailer transports, status machine, `jobId` idempotency, boot reconciler, graceful shutdown | Kill both processes mid-schedule, restart, and every email sends once at the right time |
-| **P2 Throughput** | Real-world behavior under load | Lua rate limiter (hourly + campaign), per-sender min-gap slots, overflow rescheduling, retries with backoff, Bull Board, `SMTP_DRY_RUN` load script | 1000 emails distribute correctly across hour windows |
-| **P3 Auth + Frontend** | Usable product | Google OAuth, session cookie, Next.js dashboard, Compose modal, tables, toasts | Log in, schedule from the UI, and see both tabs update |
-| **P4 Integrations** | Remaining mandatory items | Slack OAuth plus notification worker, ES index worker plus search endpoint and search bar | A live Slack message appears on a limit hit, and search returns results |
-| **P5 Ship** | Submission | README, Figma polish, rate-limiter unit tests, demo video, repo access, form | Submitted before the deadline |
+The project is split into **9 phases**. Each one ends in something runnable, so if time runs out, everything already built still works.
+
+| # | Phase | Hours | What gets built | Done when |
+|---|---|---|---|---|
+| **1** | **Setup and infrastructure** | 0–3 | Monorepo (`backend/`, `frontend/`), `docker-compose` (MySQL 8, Redis 7 with AOF + `noeviction`, ES 8 single-node), TypeScript and lint config, zod-validated `.env`, `.env.example` | `docker compose up` starts all three services, and both apps boot |
+| **2** | **Database and senders** | 3–5 | Prisma schema (users, senders, campaigns, emails, slack_integrations), migrations, indexes, `seed:senders` script that creates 3 Ethereal accounts | Tables exist, and 3 senders are stored with encrypted passwords |
+| **3** | **Core scheduling API** | 5–9 | `POST /api/campaigns` (validation, `schedulePlanner`, one DB transaction, chunked `addBulk` with `jobId = email.id`), `GET /api/emails`, `Idempotency-Key` handling | Posting 20 leads from Postman creates 20 rows and 20 delayed jobs |
+| **4** | **Email worker and persistence** | 9–14 | Separate worker process, DB claim, per-sender pooled Nodemailer transport, status updates, retries with backoff, graceful shutdown, boot reconciler, Bull Board at `/admin/queues` | **Restart test passes:** stop both processes, start them again, and every email sends once at the right time |
+| **5** | **Rate limiting and concurrency** | 14–20 | Redis Lua script (sender + campaign hourly counters, min-gap slot), `moveToDelayed` to the next window with an ordered offset, configurable `WORKER_CONCURRENCY`, `SMTP_DRY_RUN` + `load-test` script, limiter unit tests | 1,000 emails spread across hour windows in order, with none dropped or duplicated |
+| **6** | **Google authentication** | 20–24 | Google OAuth code flow, user upsert, httpOnly JWT cookie, `requireAuth`, `/api/auth/me` and logout, Next.js `/api` rewrite, protected Bull Board | Real Google login lands on the dashboard, and the API rejects requests without a session |
+| **7** | **Frontend dashboard** | 24–32 | UI primitives, header (avatar/name/email/logout), Scheduled and Sent tabs, reusable `EmailTable` with loading/empty/error states, Compose modal with CSV parsing, lead count, and projected finish time, toasts, Figma styling | A user can log in, schedule from the UI, and watch both tabs update |
+| **8** | **Slack and Elasticsearch** | 32–39 | Slack OAuth (connect, callback, status, disconnect), notification queue and worker with per-sender-hour dedupe, ES index worker, `reindex-es` script, search endpoint and search bar | A live Slack message arrives on a limit hit, and search returns the user's emails |
+| **9** | **Documentation, demo, and submission** | 39–48 | README (run steps, Ethereal and env setup, architecture, delay choice, rate-limit design, feature mapping, trade-offs), final Figma polish, demo video (≤ 5 min), repo access for Mitrajit and Yadav036, ClickUp form, buffer time | Submitted before the deadline |
+
+**Risk order:** phases 3–5 carry most of the grade (the hard constraints), so they come first. Phase 8 has the most external risk (Slack HTTPS redirect, ES memory), so start the Slack app registration during phase 1 and use the waiting time in between.
 
 ---
 
@@ -391,7 +398,7 @@ Ethereal: `npm run seed:senders` calls `nodemailer.createTestAccount()` about th
 | Preserving order when rescheduling | Overflow index counter per next window |
 | Redis evicting jobs or losing them on restart | `noeviction` + AOF in compose config |
 | Timezones (user local vs server) | UTC everywhere, converted only in the UI |
-| Slack OAuth needs HTTPS and a public redirect | Hosted API or HTTPS tunnel. Test early (P4 is time-risky) |
+| Slack OAuth needs HTTPS and a public redirect | Hosted API or HTTPS tunnel. Register the Slack app in phase 1 (phase 8 is time-risky) |
 | Elasticsearch memory footprint | Single-node, 512 MB heap, async indexing, so the app works with ES down |
 | 1000+ inserts and jobs | `createMany` + chunked `addBulk`, body stored once per campaign |
 | Cross-domain cookies in deployment | Next.js rewrite for a same origin |
@@ -408,16 +415,11 @@ no cron · MySQL + BullMQ delayed jobs · restart persistence and idempotency ·
 
 **Could (only if time allows):** hosted deployment and the improvements in section 17.
 
-**Suggested timeline:**
-| Hours | Work |
-|---|---|
-| 0–3 | P0: scaffold, compose, Prisma schema, sender seed |
-| 3–12 | P1: campaign API, worker, idempotency, reconciler, **restart test** |
-| 12–20 | P2: Lua limiter, overflow reschedule, Bull Board, load script |
-| 20–30 | P3: Google auth, dashboard, Compose, tables |
-| 30–38 | P4: Slack OAuth + alerts, ES indexing + search |
-| 38–44 | P5: README (architecture, delay choice, rate-limit design, trade-offs), polish, tests |
-| 44–48 | Demo video, repo access, form, **buffer** |
+**Timeline:** follow the 9 phases and hours in section 5. Checkpoints:
+- **Hour 14:** the restart test passes (phase 4). If it doesn't, stop and fix it before moving on.
+- **Hour 20:** rate limiting works under the 1,000-email load test (phase 5).
+- **Hour 32:** the full UI flow works end-to-end (phase 7).
+- **Hour 39:** every mandatory feature is done. After this point, only docs, polish, and the demo.
 
 **Demo video (≤ 5 min):** login (0:00) → connect Slack (0:30) → compose with a CSV of 20 leads and a limit of 5/hr, showing the projection (1:00) → Scheduled tab + Bull Board delayed jobs (1:45) → the Slack alert arrives live (2:30) → **stop the API and worker, restart, and the future emails still send** (3:00) → Sent tab with Ethereal previews + ES search (4:00) → load-script output (4:30).
 
