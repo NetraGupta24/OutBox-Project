@@ -1,0 +1,24 @@
+{
+  "name": "reachinbox-scheduler",
+  "private": true,
+  "workspaces": [
+    "backend",
+    "frontend"
+  ],
+  "scripts": {
+    "infra:up": "docker compose up -d",
+    "infra:down": "docker compose down",
+    "dev:api": "npm run dev:api -w backend",
+    "dev:worker": "npm run dev:worker -w backend",
+    "dev:web": "npm run dev -w frontend",
+    "typecheck": "npm run typecheck -w backend && npm run typecheck -w frontend",
+    "lint": "npm run lint -w backend && npm run lint -w frontend",
+    "format": "prettier --write ."
+  },
+  "devDependencies": {
+    "prettier": "^3.9.9"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

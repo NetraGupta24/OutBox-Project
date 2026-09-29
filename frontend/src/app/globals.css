@@ -1,0 +1,25 @@
+@import 'tailwindcss';
+
+/* Design tokens taken from the Figma: white surfaces, green accent,
+   orange for scheduled pills, soft grey for inputs and badges. */
+@theme {
+  --font-sans: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
+
+  --color-brand-50: #e9f7ee;
+  --color-brand-500: #00a63e;
+  --color-brand-600: #008a33;
+
+  --color-scheduled-50: #fff1e6;
+  --color-scheduled-600: #e56a00;
+
+  --color-surface: #ffffff;
+  --color-muted: #f5f6f7;
+  --color-border: #ececec;
+  --color-ink: #111111;
+  --color-ink-muted: #8a8a8a;
+}
+
+body {
+  background: var(--color-surface);
+  color: var(--color-ink);
+}

@@ -1,0 +1,34 @@
+import 'dotenv/config';
+import { z } from 'zod';
+
+const envSchema = z.object({
+  NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
+  PORT: z.coerce.number().int().positive().default(4000),
+  FRONTEND_URL: z.url().default('http://localhost:3000'),
+
+  DATABASE_URL: z.string().min(1),
+  REDIS_URL: z.string().min(1).default('redis://localhost:6379'),
+  ELASTICSEARCH_URL: z.url().default('http://localhost:9200'),
+
+  // Scheduler tuning (used from phase 4 onwards)
+  WORKER_CONCURRENCY: z.coerce.number().int().min(1).default(5),
+  MIN_SEND_INTERVAL_MS: z.coerce.number().int().min(0).default(2000),
+  MAX_EMAILS_PER_HOUR_PER_SENDER: z.coerce.number().int().min(1).default(200),
+  SMTP_DRY_RUN: z
+    .enum(['true', 'false'])
+    .default('false')
+    .transform((v) => v === 'true'),
+});
+
+const parsed = envSchema.safeParse(process.env);
+
+if (!parsed.success) {
+  console.error('Invalid environment variables:');
+  for (const issue of parsed.error.issues) {
+    console.error(`  ${issue.path.join('.')}: ${issue.message}`);
+  }
+  process.exit(1);
+}
+
+export const env = parsed.data;
+export type Env = typeof env;
