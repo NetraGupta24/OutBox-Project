@@ -36,10 +36,10 @@ Deliverables: a private GitHub repo shared with **Mitrajit** and **Yadav036**, a
 | B8 | Elasticsearch search | `emails` index, `GET /api/emails/search` |
 | B9 | Live BullMQ dashboard | Bull Board at `/admin/queues` |
 | B10 | Behavior under 1000+ load | Chunked `addBulk`, limiter, overflow ordering |
-| F1 | Real Google OAuth, header with name/email/avatar, logout | `/api/auth/*`, `Header` component |
-| F2 | Dashboard tabs + Compose button (Figma) | `/dashboard` |
-| F3 | Compose: subject, body, CSV upload with count, start time, delay, hourly limit | `ComposeModal` |
-| F4 | Scheduled and Sent tables with loading, empty, and error states | `EmailTable` (reused) |
+| F1 | Real Google OAuth, header with name/email/avatar, logout | `/api/auth/*`, sidebar `UserMenu` (Figma user card) |
+| F2 | Dashboard tabs + Compose button (Figma) | Sidebar with Scheduled/Sent + counts, `/scheduled`, `/sent` |
+| F3 | Compose: subject, body, CSV upload with count, start time, delay, hourly limit | `/compose` page (From, To + Upload List, Send Later) |
+| F4 | Scheduled and Sent tables with loading, empty, and error states | `EmailList` (reused) + `/emails/[id]` detail |
 | F5 | Clean structure, reusable components, typed API | `components/ui`, `types/` |
 | S | README, demo video, repo access, trade-offs | Root `README.md` |
 
@@ -154,7 +154,7 @@ The project is split into **9 phases**. Each one ends in something runnable, so 
 | **4** | **Email worker and persistence** | 9–14 | Separate worker process, DB claim, per-sender pooled Nodemailer transport, status updates, retries with backoff, graceful shutdown, boot reconciler, Bull Board at `/admin/queues` | **Restart test passes:** stop both processes, start them again, and every email sends once at the right time |
 | **5** | **Rate limiting and concurrency** | 14–20 | Redis Lua script (sender + campaign hourly counters, min-gap slot), `moveToDelayed` to the next window with an ordered offset, configurable `WORKER_CONCURRENCY`, `SMTP_DRY_RUN` + `load-test` script, limiter unit tests | 1,000 emails spread across hour windows in order, with none dropped or duplicated |
 | **6** | **Google authentication** | 20–24 | Google OAuth code flow, user upsert, httpOnly JWT cookie, `requireAuth`, `/api/auth/me` and logout, Next.js `/api` rewrite, protected Bull Board | Real Google login lands on the dashboard, and the API rejects requests without a session |
-| **7** | **Frontend dashboard** | 24–32 | UI primitives, header (avatar/name/email/logout), Scheduled and Sent tabs, reusable `EmailTable` with loading/empty/error states, Compose modal with CSV parsing, lead count, and projected finish time, toasts, Figma styling | A user can log in, schedule from the UI, and watch both tabs update |
+| **7** | **Frontend dashboard** | 24–32 | UI primitives, header (avatar/name/email/logout), Scheduled and Sent tabs, login page, sidebar with user card (avatar/name/email/logout) and counts, reusable `EmailList` with loading/empty/error states, email detail page, Compose page (From dropdown, recipient chips, Upload List with lead count, rich-text editor, Send Later popover, projected finish time), toasts, Figma styling | A user can log in, schedule from the UI, and watch both tabs update |
 | **8** | **Slack and Elasticsearch** | 32–39 | Slack OAuth (connect, callback, status, disconnect), notification queue and worker with per-sender-hour dedupe, ES index worker, `reindex-es` script, search endpoint and search bar | A live Slack message arrives on a limit hit, and search returns the user's emails |
 | **9** | **Documentation, demo, and submission** | 39–48 | README (run steps, Ethereal and env setup, architecture, delay choice, rate-limit design, feature mapping, trade-offs), final Figma polish, demo video (≤ 5 min), repo access for Mitrajit and Yadav036, ClickUp form, buffer time | Submitted before the deadline |
 
@@ -192,8 +192,10 @@ backend/
 | GET / POST | `/api/auth/me` · `/api/auth/logout` | Session user and logout |
 | POST | `/api/campaigns` | Schedule a batch. Accepts an `Idempotency-Key` header |
 | GET | `/api/emails?status=scheduled\|sent&page=&limit=` | Tables (paginated, user-scoped) |
-| GET | `/api/emails/search?q=&status=` | Elasticsearch search |
-| GET | `/api/senders` | Senders and current-hour usage |
+| GET | `/api/emails/counts` | Sidebar counts (Scheduled, Sent) |
+| GET | `/api/emails/:id` | Email detail view |
+| GET | `/api/emails/search?q=&status=` | Elasticsearch search (top search bar) |
+| GET | `/api/senders` | Senders for the Compose **From** dropdown, with current-hour usage |
 | GET | `/api/integrations/slack/connect` · `/callback` · `/status` | Slack OAuth |
 | DELETE | `/api/integrations/slack` | Disconnect |
 | GET | `/admin/queues` | Bull Board (auth-protected) |
@@ -202,7 +204,7 @@ backend/
 Every body is validated with zod, and every query is scoped by `user_id`.
 
 ### 6.3 Scheduling planner (plan time)
-At creation, the planner computes `scheduled_at[i] = startAt + i × delayMs`, assigns senders round-robin, and **also applies the campaign's hourly limit**: when index `i` exceeds the limit inside a window, it rolls over to the next hour. The UI can then show realistic times, and the runtime limiter only handles contention **between** campaigns that share senders.
+At creation, the planner computes `scheduled_at[i] = startAt + i × delayMs`, uses the sender chosen in **From**, and **also applies the campaign's hourly limit**: when index `i` exceeds the limit inside a window, it rolls over to the next hour. The UI can then show realistic times, and the runtime limiter only handles contention **between** campaigns that share senders.
 
 ### 6.4 Email worker (run time)
 ```ts
@@ -229,7 +231,8 @@ users(id PK, google_id UNIQUE, email UNIQUE, name, avatar_url, created_at)
 senders(id PK, user_id FK NULL, email, smtp_host, smtp_port, smtp_user,
         smtp_pass_enc, hourly_limit NULL, is_active, created_at)
 
-campaigns(id PK, user_id FK, subject, body TEXT, start_at DATETIME(3),
+campaigns(id PK, user_id FK, sender_id FK, subject, body_html MEDIUMTEXT,
+          body_text TEXT, start_at DATETIME(3),
           delay_ms INT, hourly_limit INT, total INT, idempotency_key UNIQUE NULL,
           created_at)
 
@@ -303,7 +306,7 @@ Parallel jobs can't double-send because of (a) the unique `jobId` in BullMQ, (b)
 ### 9.4 Behavior under load (1000+ emails due at the same time)
 - **Ingest:** a single DB transaction with `createMany`, then `addBulk` in chunks of 500. The API responds in about a second.
 - **Execution:** the worker pulls `concurrency` jobs at a time. The per-sender slot key spaces them `MIN_SEND_INTERVAL_MS` apart, and the hourly counter caps each window. Overflow lands in the next windows in FIFO order.
-- **Example:** 1000 leads, 3 senders, and 200/hr per sender give 600 in hour 1 and 400 in hour 2. Nothing is dropped or failed, and the Compose preview shows the same projection before the user clicks Schedule.
+- **Example:** 1000 leads from one sender at 200/hr take 5 hour windows (200 each). If three campaigns on three different senders run at once, each sender has its own counter, so they don't slow each other down. Nothing is dropped or failed, and the Compose preview shows the same projection before the user clicks Schedule.
 - **Demo:** `SMTP_DRY_RUN=true` switches to Nodemailer's `jsonTransport` (same library, no network), so `npm run load-test` can push 1000 jobs and print the per-hour distribution without spamming Ethereal.
 
 ### 9.5 Persistence and restart
@@ -325,29 +328,65 @@ Parallel jobs can't double-send because of (a) the unique `jobId` in BullMQ, (b)
 
 **Stack:** Next.js (App Router) + TypeScript + Tailwind. Next.js is chosen for the `/api` rewrite (same-origin cookies) and simple routing.
 
+### 11.1 What the Figma shows (7 frames)
+
+The design is a **Gmail-style inbox**: white background, green accent, a left sidebar, and a list on the right. Compose is a **full page**, not a modal.
+
+| Frame | What it contains | How to build it |
+|---|---|---|
+| **1. Login** | Centered card, "Login" title, green-tinted **Login with Google** button, "or sign up through email" divider, Email ID and Password fields, solid green **Login** button | Only Google login is required. Render the email/password fields to match the design but keep them disabled, with a "Use Google to sign in" hint, and state this in the README. Don't build password auth |
+| **2. Dashboard: Scheduled** | Sidebar: logo, **user card** (avatar, name, email, dropdown), outlined green **Compose** button, "CORE" label, **Scheduled** and **Sent** items with counts. Main: **search bar**, filter and refresh icons, rows | Row: `To: <name>` · orange pill with clock icon and time (`Tue 9:15:12 AM`) · **bold subject** · grey body preview · star icon |
+| **3. Dashboard: Sent** | Same layout, Sent item highlighted | Row pill is a grey **Sent** badge (a red **Failed** badge for failures) |
+| **4. Email detail** | Back arrow, subject as title, star/archive/delete icons, sender avatar circle, sender name + address, "to me", date on the right, formatted body, image attachments | Opens when a row is clicked. Add an Ethereal preview link here for sent emails |
+| **5. Compose (empty)** | Back arrow + "Compose New Email", attachment icon, clock icon, outlined **Send Later** button. Fields: **From** (sender dropdown), **To** with **Upload List** link, Subject, **Delay between 2 emails**, **Hourly Limit**, rich-text editor with toolbar | **From** picks one of the Ethereal senders. **Upload List** opens the CSV/text file picker |
+| **6. Compose (leads loaded)** | **To** shows email chips (`tame@jmail.com`) plus a **+4** overflow chip | Show the first 3 chips, then `+N`. Also show "**N emails detected**" (a hard requirement) next to Upload List |
+| **7. Send Later popover** | "Pick date & time" input with calendar icon, presets (Tomorrow, Tomorrow 10:00 AM, 11:00 AM, 3:00 PM), **Cancel** and **Done** | This sets the campaign **start time**. **Done** closes the popover, and the top button then schedules the campaign |
+
+**Not required, so keep them visual or skip:** star, archive, and delete icons, file attachments, and the filter icon. The filter icon can simply switch the status filter (all/sent/failed). The **search bar** is where Elasticsearch search appears, and the **refresh** icon refetches the list.
+
+### 11.2 Folder structure
+
 ```
 frontend/src/
-  app/          login/page.tsx · dashboard/page.tsx · layout.tsx · middleware.ts (auth redirect)
-  components/ui Button · Input · Textarea · Modal · Tabs · Table · Badge · Spinner · EmptyState · Toast · Avatar
+  app/
+    login/page.tsx
+    (app)/layout.tsx          sidebar + auth guard
+    (app)/scheduled/page.tsx
+    (app)/sent/page.tsx
+    (app)/emails/[id]/page.tsx
+    (app)/compose/page.tsx
+  components/ui   Button · Input · Select · Chip · Badge · StatusPill · Popover · DateTimePicker ·
+                  IconButton · Spinner · Skeleton · EmptyState · Toast · Avatar
   features/
-    auth/       Header.tsx (avatar, name, email, logout) · useSession.ts
-    compose/    ComposeModal.tsx · CsvDropzone.tsx · parseLeads.ts · SchedulePreview.tsx
-    emails/     EmailTable.tsx (one reusable table for both tabs) · useEmails.ts · SearchBar.tsx
-    slack/      SlackConnectButton.tsx
-  lib/          api.ts (typed fetch wrapper, error normalisation) · format.ts (dates)
-  types/        api.ts (Email, Campaign, User, Paginated<T>, ApiError)
+    layout/       Sidebar.tsx · UserMenu.tsx (avatar, name, email, logout, Connect Slack) · NavItem.tsx
+    emails/       EmailList.tsx (one reusable list for Scheduled and Sent) · EmailRow.tsx ·
+                  EmailDetail.tsx · SearchBar.tsx · useEmails.ts · useCounts.ts
+    compose/      ComposeForm.tsx · RecipientChips.tsx · UploadListButton.tsx · parseLeads.ts ·
+                  SendLaterPopover.tsx · RichTextEditor.tsx · SchedulePreview.tsx
+    slack/        SlackConnectButton.tsx
+  lib/            api.ts (typed fetch wrapper, error normalisation) · format.ts (dates)
+  types/          api.ts (Email, EmailDetail, Campaign, Sender, User, Counts, Paginated<T>, ApiError)
 ```
 
-**Screens:**
-- **Login:** a Google button that redirects to the dashboard once signed in.
-- **Dashboard:** the header, **Scheduled** and **Sent** tabs, a search bar, the **Compose New Email** button, and a Connect Slack button in the header menu.
-- **Compose:** subject, body, a CSV or text upload that is parsed client-side (regex extraction, lowercase, dedupe, invalid addresses counted separately), a "**N emails detected**" count, start time, delay between emails, and hourly limit. It also shows a **projected finish time**. Schedule calls `POST /api/campaigns` with an `Idempotency-Key`.
-- **Tables:**
-  - **Scheduled:** email, subject, scheduled time, and status (`scheduled`/`delayed`).
-  - **Sent:** email, subject, sent time, and status (`sent`/`failed`), plus an Ethereal preview link.
-  - **Both:** skeleton loaders, empty states, error toasts, pagination, and a light 5 s polling refresh.
+The assignment asks for a "top header" with name, email, and avatar. In the Figma this is the **user card at the top of the sidebar**, so the user card satisfies it. Its dropdown holds **Logout** and **Connect Slack**.
 
-**Quality bar:** props and API types are explicit, there is one `EmailTable` for both tabs, and there is no duplicated fetch logic.
+### 11.3 Behavior
+
+- **Compose:**
+  - Subject, a rich-text body, and **From** (sender).
+  - Leads come from typing addresses into **To** or from **Upload List**. Parsing happens in the browser: extract emails with a regex, lowercase them, remove duplicates, and count invalid ones separately.
+  - **Delay between 2 emails** and **Hourly Limit**.
+  - Start time comes from **Send Later**.
+  - **SchedulePreview** shows the projected finish time.
+  - The final button calls `POST /api/campaigns` with an `Idempotency-Key`, then redirects to Scheduled with a toast.
+- **Rich-text editor:** the toolbar in the Figma (undo/redo, font size, bold/italic/underline, alignment, lists, indent, quote, strikethrough) needs an editor library. Tiptap is the lightest fit. The body is stored as HTML and sent with Nodemailer's `html` option, with a plain-text fallback.
+- **Lists:**
+  - **Scheduled:** recipient, subject, scheduled time (orange pill), and status (`scheduled` or `delayed`).
+  - **Sent:** recipient, subject, sent time, and status (`sent` or `failed`).
+  - **Both:** skeleton rows while loading, an empty state, error toasts, pagination or "load more", and 5 s polling so statuses update live.
+- **Sidebar counts:** come from `GET /api/emails/counts`.
+
+**Quality bar:** props and API types are explicit, there is one `EmailList` for both tabs, and there is no duplicated fetch logic.
 
 ---
 
@@ -428,7 +467,7 @@ no cron · MySQL + BullMQ delayed jobs · restart persistence and idempotency ·
 ## 17. Improvements That Would Stand Out (within the existing stack)
 
 1. **Transactional outbox + reconciler, named explicitly.** MySQL is the truth, jobs are derived, and on boot the system self-heals any row that has no job. It's the classic *Outbox pattern*, which suits Outbox Labs. It turns "survives restarts" into "survives even losing Redis", and it takes about 40 lines.
-2. **Send-time projection in Compose.** The UI and worker share one pure function (`schedulePlanner`) that shows "1,000 leads · 3 senders · 200/hr → finishes Tue 16:40" before the user schedules. Reviewers see that the rate-limit logic is deterministic and unit-tested.
+2. **Send-time projection in Compose.** The UI and worker share one pure function (`schedulePlanner`) that shows "1,000 leads · 200/hr · 2 s gap → finishes Tue 16:40" before the user schedules. Reviewers see that the rate-limit logic is deterministic and unit-tested.
 3. **Ethereal preview links and a deterministic Message-ID in the Sent table.** Every sent row opens the actual captured email, which makes the demo verifiable in one click and shows idempotency thinking.
 4. **Load and restart demo script.** `npm run load-test` (dry-run transport) schedules 1,000 emails and prints the per-hour and per-sender distribution. This covers the bonus "behavior under load" requirement with hard numbers rather than a verbal claim.
 
