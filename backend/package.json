@@ -9,15 +9,17 @@
     "build": "tsc -p tsconfig.build.json",
     "start:api": "node dist/server.js",
     "start:worker": "node dist/worker.js",
-    "typecheck": "tsc -p tsconfig.json --noEmit",
-    "lint": "eslint src",
+    "typecheck": "tsc -p tsconfig.json",
+    "lint": "eslint src test",
     "db:generate": "prisma generate",
     "db:migrate": "prisma migrate dev",
     "db:deploy": "prisma migrate deploy",
     "db:studio": "prisma studio",
     "seed:senders": "tsx src/scripts/seedSenders.ts",
     "postinstall": "prisma generate",
-    "test": "vitest run"
+    "test": "vitest run",
+    "test:integration": "vitest run --config vitest.integration.config.ts",
+    "load-test": "tsx src/scripts/loadTest.ts"
   },
   "dependencies": {
     "@bull-board/api": "^9.10.2",

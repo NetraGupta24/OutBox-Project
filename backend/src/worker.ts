@@ -1,16 +1,23 @@
 import { env } from './config/env.js';
 import { prisma } from './lib/prisma.js';
 import { redis } from './lib/redis.js';
-import { emailQueue } from './queue/queues.js';
+import { emailQueue, notificationQueue } from './queue/queues.js';
 import { reconcileEmailJobs } from './queue/reconcile.js';
 import { closeTransports } from './modules/senders/transportPool.js';
 import { createEmailWorker } from './workers/email.worker.js';
+import { createNotificationWorker } from './workers/notification.worker.js';
 
 const SHUTDOWN_TIMEOUT_MS = 30_000;
 
 const worker = createEmailWorker();
+const notificationWorker = createNotificationWorker();
+const windowLabel =
+  env.RATE_LIMIT_WINDOW_MS === 3_600_000 ? 'hour' : `${env.RATE_LIMIT_WINDOW_MS / 1000}s window`;
 console.log(
-  `Email worker started (concurrency=${env.WORKER_CONCURRENCY}${env.SMTP_DRY_RUN ? ', SMTP dry run' : ''})`,
+  `Email worker started: concurrency ${env.WORKER_CONCURRENCY}, ` +
+    `max ${env.MAX_EMAILS_PER_HOUR_PER_SENDER} per sender per ${windowLabel}, ` +
+    `min ${env.MIN_SEND_INTERVAL_MS} ms between sends` +
+    (env.SMTP_DRY_RUN ? ', SMTP dry run' : ''),
 );
 
 // Reconcile on startup and after every Redis reconnect. Runs are serialised;
@@ -56,9 +63,14 @@ async function shutdown(signal: string) {
   }, SHUTDOWN_TIMEOUT_MS).unref();
 
   // Stops taking new jobs and waits for the ones in progress.
-  await worker.close();
+  await Promise.allSettled([worker.close(), notificationWorker.close()]);
   closeTransports();
-  await Promise.allSettled([emailQueue.close(), prisma.$disconnect(), redis.quit()]);
+  await Promise.allSettled([
+    emailQueue.close(),
+    notificationQueue.close(),
+    prisma.$disconnect(),
+    redis.quit(),
+  ]);
   process.exit(0);
 }
 

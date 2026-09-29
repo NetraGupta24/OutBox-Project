@@ -3,7 +3,7 @@ import type { RequestHandler, Router } from 'express';
 import { createBullBoard } from '@bull-board/api';
 import { BullMQAdapter } from '@bull-board/api/bullMQAdapter';
 import { ExpressAdapter } from '@bull-board/express';
-import { emailQueue } from '../../queue/queues.js';
+import { emailQueue, notificationQueue } from '../../queue/queues.js';
 
 export const BULL_BOARD_PATH = '/admin/queues';
 
@@ -24,6 +24,9 @@ export function basicAuth(username: string, password: string): RequestHandler {
 export function bullBoardRouter(): Router {
   const serverAdapter = new ExpressAdapter();
   serverAdapter.setBasePath(BULL_BOARD_PATH);
-  createBullBoard({ queues: [new BullMQAdapter(emailQueue)], serverAdapter });
+  createBullBoard({
+    queues: [new BullMQAdapter(emailQueue), new BullMQAdapter(notificationQueue)],
+    serverAdapter,
+  });
   return serverAdapter.getRouter() as Router;
 }

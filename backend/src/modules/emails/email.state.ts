@@ -1,6 +1,7 @@
 /**
  * Status transitions for one email row, used by the worker:
  *
+ *   scheduled ──rate limit──▶ delayed (moved to the next window)
  *   scheduled | delayed ──claim──▶ sending ──▶ sent
  *                                     │
  *                                     ├──▶ scheduled (temporary error, BullMQ retries)
@@ -66,6 +67,15 @@ export async function markSent(emailId: number, delivery: Delivery): Promise<voi
       lockedAt: null,
       error: null,
     },
+  });
+}
+
+// Rate limit reached: the email waits for the next window. The new time is
+// saved so the Scheduled list shows when it will really go out.
+export async function deferEmail(emailId: number, retryAt: number): Promise<void> {
+  await prisma.email.updateMany({
+    where: { id: emailId, status: { in: ['scheduled', 'delayed'] } },
+    data: { status: 'delayed', scheduledAt: new Date(retryAt) },
   });
 }
 

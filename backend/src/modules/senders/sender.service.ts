@@ -2,12 +2,15 @@ import type { Sender } from '../../generated/prisma/client.js';
 import { env } from '../../config/env.js';
 import { prisma } from '../../lib/prisma.js';
 import { badRequest } from '../../lib/httpError.js';
+import { senderUsage } from '../rateLimit/rateLimiter.js';
 
 export type SenderSummary = {
   id: number;
   email: string;
   displayName: string;
   hourlyLimit: number;
+  // Emails counted in the current rate-limit window (null if Redis is unreachable).
+  usage: { used: number; windowStart: string; windowEnd: string } | null;
 };
 
 // A sender's own limit can only lower the global per-sender cap.
@@ -18,12 +21,21 @@ export function senderHourlyLimit(sender: Pick<Sender, 'hourlyLimit'>): number {
   );
 }
 
-function toSummary(sender: Sender): SenderSummary {
+async function toSummary(sender: Sender, now: number): Promise<SenderSummary> {
+  const usage = await senderUsage(sender.id, now, env.RATE_LIMIT_WINDOW_MS).then(
+    (u) => ({
+      used: u.used,
+      windowStart: new Date(u.windowStart).toISOString(),
+      windowEnd: new Date(u.windowEnd).toISOString(),
+    }),
+    () => null,
+  );
   return {
     id: sender.id,
     email: sender.email,
     displayName: sender.displayName,
     hourlyLimit: senderHourlyLimit(sender),
+    usage,
   };
 }
 
@@ -33,7 +45,8 @@ export async function listSenders(userId: number): Promise<SenderSummary[]> {
     where: { isActive: true, OR: [{ userId: null }, { userId }] },
     orderBy: { id: 'asc' },
   });
-  return senders.map(toSummary);
+  const now = Date.now();
+  return Promise.all(senders.map((sender) => toSummary(sender, now)));
 }
 
 export async function getUsableSender(userId: number, senderId: number): Promise<Sender> {

@@ -34,6 +34,9 @@ const envSchema = z.object({
   WORKER_CONCURRENCY: z.coerce.number().int().min(1).default(5),
   MIN_SEND_INTERVAL_MS: z.coerce.number().int().min(0).default(2000),
   MAX_EMAILS_PER_HOUR_PER_SENDER: z.coerce.number().int().min(1).default(200),
+  // Length of a rate-limit window. One hour in normal use; shorten it (e.g. 60000)
+  // to watch limits being hit and emails moving to the next window during a demo.
+  RATE_LIMIT_WINDOW_MS: z.coerce.number().int().min(10_000).default(3_600_000),
   MAX_RECIPIENTS_PER_CAMPAIGN: z.coerce.number().int().min(1).default(10_000),
   SMTP_DRY_RUN: z
     .enum(['true', 'false'])

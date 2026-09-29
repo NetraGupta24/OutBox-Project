@@ -2,7 +2,7 @@ import { env } from './config/env.js';
 import { createApp } from './app.js';
 import { redis } from './lib/redis.js';
 import { prisma } from './lib/prisma.js';
-import { emailQueue } from './queue/queues.js';
+import { emailQueue, notificationQueue } from './queue/queues.js';
 
 const SHUTDOWN_TIMEOUT_MS = 10_000;
 
@@ -26,7 +26,12 @@ function shutdown(signal: string) {
   }, SHUTDOWN_TIMEOUT_MS).unref();
 
   server.close(async () => {
-    await Promise.allSettled([emailQueue.close(), redis.quit(), prisma.$disconnect()]);
+    await Promise.allSettled([
+      emailQueue.close(),
+      notificationQueue.close(),
+      redis.quit(),
+      prisma.$disconnect(),
+    ]);
     process.exit(0);
   });
 }

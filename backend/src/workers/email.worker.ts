@@ -5,6 +5,7 @@ import { createRedisConnection } from '../lib/redis.js';
 import { EMAIL_QUEUE, type EmailJobData } from '../queue/queues.js';
 import {
   claimEmail,
+  deferEmail,
   getDeliveryMarker,
   markFailed,
   markSent,
@@ -13,6 +14,9 @@ import {
   type Delivery,
 } from '../modules/emails/email.state.js';
 import { deliver, errorMessage, isPermanentFailure } from '../modules/emails/mailer.js';
+import { reserveSendSlot } from '../modules/rateLimit/rateLimiter.js';
+import { reportLimitReached } from '../modules/rateLimit/limitEvents.js';
+import { senderHourlyLimit } from '../modules/senders/sender.service.js';
 
 export type EmailJobResult =
   { outcome: 'sent'; messageId: string; resumed: boolean } | { outcome: 'skipped'; reason: string };
@@ -21,7 +25,7 @@ async function loadEmail(emailId: number) {
   return prisma.email.findUnique({
     where: { id: emailId },
     include: {
-      campaign: { select: { bodyHtml: true, bodyText: true } },
+      campaign: { select: { bodyHtml: true, bodyText: true, subject: true, hourlyLimit: true } },
       sender: true,
     },
   });
@@ -37,6 +41,84 @@ export async function processEmail(
   if (!email) return { outcome: 'skipped', reason: 'email no longer exists' };
   if (email.status === 'sent' || email.status === 'failed') {
     return { outcome: 'skipped', reason: `already ${email.status}` };
+  }
+
+  // Rate limit: reserve a send slot before claiming. A reservation or deferral
+  // stored on the job is only valid for the attempt that made it.
+  const now = Date.now();
+  const { reservation, deferral } = job.data;
+  const hasSlot = reservation?.attempt === job.attemptsMade && reservation.sendAt <= now;
+
+  if (!hasSlot) {
+    const senderLimit = senderHourlyLimit(email.sender);
+    const campaignLimit = email.campaign.hourlyLimit;
+    const deferredFrom =
+      deferral?.attempt === job.attemptsMade ? { window: deferral.window } : undefined;
+    const result = await reserveSendSlot({
+      now,
+      senderId: email.senderId,
+      campaignId: email.campaignId,
+      senderLimit,
+      campaignLimit,
+      minIntervalMs: env.MIN_SEND_INTERVAL_MS,
+      windowMs: env.RATE_LIMIT_WINDOW_MS,
+      deferredFrom,
+    });
+
+    const limitHit =
+      result.kind === 'deferred'
+        ? result.scope === 'queue'
+          ? null
+          : result.scope
+        : result.reachedSenderLimit
+          ? 'sender'
+          : result.reachedCampaignLimit
+            ? 'campaign'
+            : null;
+    if (limitHit) {
+      const windowMs = env.RATE_LIMIT_WINDOW_MS;
+      await reportLimitReached(
+        {
+          scope: limitHit,
+          userId: email.userId,
+          senderId: email.senderId,
+          senderEmail: email.sender.email,
+          campaignId: email.campaignId,
+          campaignSubject: email.campaign.subject,
+          limit: limitHit === 'sender' ? senderLimit : campaignLimit,
+          windowStart: new Date(result.window * windowMs).toISOString(),
+          windowEnd: new Date((result.window + 1) * windowMs).toISOString(),
+        },
+        result.window,
+      ).catch((err) =>
+        console.error(`[email-${emailId}] could not queue limit notification:`, errorMessage(err)),
+      );
+    }
+
+    if (result.kind === 'deferred') {
+      // Moved to a later window (or behind emails already waiting in this one),
+      // keeping arrival order. Not a failure, so no retry attempt is used.
+      await deferEmail(emailId, result.retryAt);
+      await job.updateData({
+        emailId,
+        deferral: { window: result.targetWindow, attempt: job.attemptsMade },
+      });
+      await job.moveToDelayed(result.retryAt, token);
+      throw new DelayedError();
+    }
+    if (result.sendAt > now) {
+      // Too soon after this sender's previous email: wait for the reserved slot.
+      await job.updateData({
+        emailId,
+        reservation: { sendAt: result.sendAt, attempt: job.attemptsMade },
+      });
+      await job.moveToDelayed(result.sendAt, token);
+      throw new DelayedError();
+    }
+    if (deferredFrom) {
+      // The deferral has been used: a later re-run must not count it again.
+      await job.updateData({ emailId });
+    }
   }
 
   const claim = await claimEmail(emailId);

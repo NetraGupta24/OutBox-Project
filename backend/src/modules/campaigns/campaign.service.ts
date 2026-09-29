@@ -50,6 +50,7 @@ async function resolveSettings(userId: number, input: ScheduleSettings, now: num
     startAt: Math.max(requestedStart, now),
     delayMs: Math.max(input.delayMs, env.MIN_SEND_INTERVAL_MS),
     hourlyLimit: Math.min(input.hourlyLimit, senderHourlyLimit(sender)),
+    windowMs: env.RATE_LIMIT_WINDOW_MS,
   };
 }
 

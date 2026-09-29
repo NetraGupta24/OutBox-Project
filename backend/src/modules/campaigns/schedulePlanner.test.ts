@@ -1,13 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import { HOUR_MS, hourWindowStart, planSchedule } from './schedulePlanner.js';
+import { HOUR_MS, windowStart, planSchedule } from './schedulePlanner.js';
 
 const at = (iso: string) => Date.parse(iso);
 const iso = (ms: number) => new Date(ms).toISOString();
 
-describe('hourWindowStart', () => {
+describe('windowStart', () => {
   it('floors to the start of the UTC hour', () => {
-    expect(iso(hourWindowStart(at('2026-10-01T10:59:59.999Z')))).toBe('2026-10-01T10:00:00.000Z');
-    expect(iso(hourWindowStart(at('2026-10-01T11:00:00.000Z')))).toBe('2026-10-01T11:00:00.000Z');
+    expect(iso(windowStart(at('2026-10-01T10:59:59.999Z')))).toBe('2026-10-01T10:00:00.000Z');
+    expect(iso(windowStart(at('2026-10-01T11:00:00.000Z')))).toBe('2026-10-01T11:00:00.000Z');
   });
 });
 
@@ -76,7 +76,7 @@ describe('planSchedule', () => {
     });
     const perWindow = new Map<number, number>();
     for (const t of plan.times) {
-      const w = hourWindowStart(t);
+      const w = windowStart(t);
       perWindow.set(w, (perWindow.get(w) ?? 0) + 1);
     }
     expect([...perWindow.values()]).toEqual([200, 200, 200, 200, 200]);
