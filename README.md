@@ -71,6 +71,7 @@ Bull Board shows the email queue live (delayed, waiting, active, completed and f
 - **Elasticsearch** runs as a single node with security disabled and a 512 MB heap, for local development only.
 - **MySQL** runs `docker/mysql/init.sql` when its volume is first created. It lets the app user create the temporary database `prisma migrate dev` needs.
 - All data lives in named Docker volumes. `npm run infra:down` stops the containers and keeps the data.
+- **Port already in use or reserved** (`ports are not available ... bind`, common on Windows where Hyper-V reserves port ranges): stop whatever holds the port (e.g. a local MySQL service), or restart WinNAT from an admin terminal (`net stop winnat` then `net start winnat`), or publish on another port. For the last option, copy `.env.example` to `.env` in the repo root, set e.g. `MYSQL_HOST_PORT=3307`, and use that port in `DATABASE_URL` in `backend/.env` (and `TEST_DATABASE_URL` for the integration tests).
 
 ## Google sign-in setup
 
