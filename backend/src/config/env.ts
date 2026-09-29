@@ -23,7 +23,14 @@ const envSchema = z.object({
     .default('false')
     .transform((v) => v === 'true'),
 
-  // Scheduler tuning (used from phase 4 onwards)
+  // Bull Board queue dashboard at /admin/queues (HTTP Basic auth). Disabled without a password.
+  BULL_BOARD_USERNAME: z.string().min(1).default('admin'),
+  BULL_BOARD_PASSWORD: z
+    .union([z.literal(''), z.string().min(8)])
+    .optional()
+    .transform((v) => v || undefined),
+
+  // Scheduler tuning
   WORKER_CONCURRENCY: z.coerce.number().int().min(1).default(5),
   MIN_SEND_INTERVAL_MS: z.coerce.number().int().min(0).default(2000),
   MAX_EMAILS_PER_HOUR_PER_SENDER: z.coerce.number().int().min(1).default(200),

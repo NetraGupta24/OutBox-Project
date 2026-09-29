@@ -9,6 +9,9 @@ const nextConfig: NextConfig = {
     return [
       { source: '/api/:path*', destination: `${backendUrl}/api/:path*` },
       { source: '/health', destination: `${backendUrl}/health` },
+      // Bull Board queue dashboard
+      { source: '/admin/queues', destination: `${backendUrl}/admin/queues` },
+      { source: '/admin/queues/:path*', destination: `${backendUrl}/admin/queues/:path*` },
     ];
   },
 };

@@ -21,7 +21,6 @@ A full-stack email scheduler: an Express + BullMQ backend that schedules and sen
 ```
 backend/    Express API (src/server.ts) and worker process (src/worker.ts)
 frontend/   Next.js dashboard
-docs/       Project report and design notes
 docker-compose.yml
 ```
 
@@ -39,7 +38,9 @@ npm run infra:up
 # 3. Configure environment variables
 cp backend/.env.example backend/.env
 cp frontend/.env.example frontend/.env.local
-# then set ENCRYPTION_KEY in backend/.env to the output of: openssl rand -hex 32
+# then, in backend/.env:
+#   ENCRYPTION_KEY       output of: openssl rand -hex 32
+#   BULL_BOARD_PASSWORD  any password of 8+ characters, for the queue dashboard
 
 # 4. Create the database tables
 npm run db:migrate -w backend
@@ -55,7 +56,11 @@ npm run dev:web      # Dashboard on http://localhost:3000
 
 Check that everything is connected: `curl http://localhost:4000/health` (reports MySQL, Redis and Elasticsearch), or open http://localhost:3000.
 
-The frontend proxies `/api/*` to the backend (see `frontend/next.config.ts`), so the browser only talks to one origin.
+The frontend proxies `/api/*` and `/admin/queues` to the backend (see `frontend/next.config.ts`), so the browser only talks to one origin.
+
+### Queue dashboard
+
+Bull Board shows the email queue live (delayed, waiting, active, completed and failed jobs) at http://localhost:3000/admin/queues (or :4000). Sign in with `BULL_BOARD_USERNAME` / `BULL_BOARD_PASSWORD`; the dashboard is disabled while the password is empty.
 
 ### Infrastructure notes
 
@@ -135,13 +140,47 @@ curl -X POST http://localhost:4000/api/campaigns \
 
 **Idempotency.** Repeating a request with the same `Idempotency-Key` returns the original campaign (HTTP 200) instead of creating a new one, even when several arrive at once. If Redis is down, the campaign is still saved and the API answers 503; retrying with the same key queues the jobs once Redis is back.
 
+## How sending works
+
+The worker (`npm run dev:worker`) is a separate process that runs `WORKER_CONCURRENCY` jobs in parallel. For each due job:
+
+1. **Claim.** One conditional `UPDATE` moves the row from `scheduled`/`delayed` to `sending`. Only one worker can win it, however many copies of the job exist.
+2. **Send** through the sender's pooled SMTP connection (one pool per sender), with a fixed `Message-ID` of `<email-<id>.c<campaign>@reachinbox.local>`.
+3. **Record.** A delivery marker is written to Redis as soon as SMTP accepts the message, then the row becomes `sent` with the time, Message-ID and Ethereal preview link.
+
+**Failures.** SMTP 4xx replies and network errors are temporary: the row goes back to `scheduled` and BullMQ retries (3 attempts, exponential backoff from 5 s). 5xx replies (bad mailbox, bad credentials) are permanent: the row becomes `failed` at once, with the error saved.
+
+**No duplicates.** Several layers stop an email from being sent twice:
+
+| Layer                             | Protects against                                                 |
+| --------------------------------- | ---------------------------------------------------------------- |
+| Deterministic job ID `email-<id>` | The same email being queued twice                                |
+| Conditional claim in MySQL        | Two workers or two jobs processing the same email                |
+| Unique `(campaign_id, recipient)` | A lead appearing twice in one campaign                           |
+| Delivery marker in Redis          | Re-sending after a crash between the SMTP send and saving `sent` |
+| `Idempotency-Key`                 | A double-submitted Schedule creating a second campaign           |
+
+The one unavoidable gap: if a worker is killed after the SMTP server accepted a message but before it confirmed, the message may be sent again when recovered. No SMTP client can close that gap.
+
+## Restarts and persistence
+
+- **Jobs live in Redis**, which saves to disk (AOF), so delayed jobs survive a Redis restart.
+- **Stopping the worker** (Ctrl+C / `SIGTERM`) lets in-progress sends finish before exiting.
+- **After a restart**, emails that came due while everything was down are sent immediately, and future ones at their scheduled time. Nothing starts over.
+- **A crashed worker** (`kill -9`) leaves its email in `sending`. BullMQ detects the abandoned job, and the email can be claimed again once its claim is 2 minutes old.
+- **MySQL is the source of truth.** When the worker starts, and whenever its Redis connection comes back, it checks every unsent email in MySQL and re-queues any that has no live job (`backend/src/queue/reconcile.ts`). This covers a crash between saving and queueing, and even a wiped Redis. It is event-driven, not a timer.
+
+To see it: schedule a few emails a minute apart, stop the API and worker, wait until some are due, then start them again.
+
+`SMTP_DRY_RUN=true` builds every email but never connects to SMTP: useful for load tests or working offline.
+
 ## Useful scripts
 
 | Command                           | What it does                                         |
 | --------------------------------- | ---------------------------------------------------- |
 | `npm run typecheck`               | Type-checks backend and frontend                     |
 | `npm run lint`                    | Lints backend and frontend                           |
-| `npm test -w backend`             | Runs backend unit tests (Vitest)                     |
+| `npm test`                        | Runs backend unit tests (Vitest)                     |
 | `npm run format`                  | Formats the repository with Prettier                 |
 | `npm run db:migrate -w backend`   | Applies migrations (creates new ones in development) |
 | `npm run db:studio -w backend`    | Opens Prisma Studio to browse the database           |
@@ -154,7 +193,7 @@ curl -X POST http://localhost:4000/api/campaigns \
 | 1   | Setup and infrastructure           | Done        |
 | 2   | Database and senders               | Done        |
 | 3   | Core scheduling API                | Done        |
-| 4   | Email worker and persistence       | Not started |
+| 4   | Email worker and persistence       | Done        |
 | 5   | Rate limiting and concurrency      | Not started |
 | 6   | Google authentication              | Not started |
 | 7   | Frontend dashboard                 | Not started |

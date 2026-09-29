@@ -20,6 +20,8 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@bull-board/api": "^9.10.2",
+    "@bull-board/express": "^9.10.2",
     "@elastic/elasticsearch": "^8.19.2",
     "@prisma/adapter-mariadb": "^7.10.0",
     "@prisma/client": "^7.10.0",

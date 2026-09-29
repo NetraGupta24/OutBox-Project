@@ -3,13 +3,12 @@ import { env } from '../../config/env.js';
 import { prisma } from '../../lib/prisma.js';
 import { HttpError, badRequest } from '../../lib/httpError.js';
 import { withTimeout } from '../../lib/async.js';
-import { emailJobId, emailQueue } from '../../queue/queues.js';
+import { enqueueEmails } from '../../queue/queues.js';
 import { getUsableSender, senderHourlyLimit } from '../senders/sender.service.js';
 import { planSchedule } from './schedulePlanner.js';
 import { htmlToText, normalizeRecipients } from './recipients.js';
 import type { CampaignInput } from './campaign.schema.js';
 
-const ENQUEUE_CHUNK_SIZE = 500;
 // BullMQ waits for Redis to be ready before running commands, so an outage
 // would otherwise hang the request.
 const ENQUEUE_TIMEOUT_MS = 5_000;
@@ -79,20 +78,7 @@ export async function enqueueCampaign(campaignId: number): Promise<number> {
     orderBy: { id: 'asc' },
   });
 
-  const now = Date.now();
-  for (let i = 0; i < pending.length; i += ENQUEUE_CHUNK_SIZE) {
-    const chunk = pending.slice(i, i + ENQUEUE_CHUNK_SIZE);
-    await emailQueue.addBulk(
-      chunk.map((email) => ({
-        name: 'send',
-        data: { emailId: email.id },
-        opts: {
-          jobId: emailJobId(email.id),
-          delay: Math.max(0, email.scheduledAt.getTime() - now),
-        },
-      })),
-    );
-  }
+  await enqueueEmails(pending);
   return pending.length;
 }
 

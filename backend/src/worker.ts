@@ -1,23 +1,66 @@
 import { env } from './config/env.js';
+import { prisma } from './lib/prisma.js';
 import { redis } from './lib/redis.js';
+import { emailQueue } from './queue/queues.js';
+import { reconcileEmailJobs } from './queue/reconcile.js';
+import { closeTransports } from './modules/senders/transportPool.js';
+import { createEmailWorker } from './workers/email.worker.js';
 
-// Worker process entrypoint. The BullMQ email, notification and index
-// workers are registered here in phases 4, 5 and 8.
-async function main() {
-  await redis.ping();
-  console.log(`Worker process started (concurrency=${env.WORKER_CONCURRENCY})`);
+const SHUTDOWN_TIMEOUT_MS = 30_000;
+
+const worker = createEmailWorker();
+console.log(
+  `Email worker started (concurrency=${env.WORKER_CONCURRENCY}${env.SMTP_DRY_RUN ? ', SMTP dry run' : ''})`,
+);
+
+// Reconcile on startup and after every Redis reconnect. Runs are serialised;
+// a trigger during a run schedules one more run.
+let reconciling = false;
+let rerun = false;
+
+async function reconcile(trigger: string) {
+  if (reconciling) {
+    rerun = true;
+    return;
+  }
+  reconciling = true;
+  try {
+    do {
+      rerun = false;
+      const { checked, requeued } = await reconcileEmailJobs();
+      console.log(`Reconcile (${trigger}): ${checked} pending email(s), ${requeued} re-queued`);
+    } while (rerun);
+  } catch (err) {
+    console.error(`Reconcile (${trigger}) failed:`, (err as Error).message);
+  } finally {
+    reconciling = false;
+  }
 }
 
+let readyBefore = false;
+redis.on('ready', () => {
+  void reconcile(readyBefore ? 'redis reconnected' : 'startup');
+  readyBefore = true;
+});
+
+let shuttingDown = false;
+
 async function shutdown(signal: string) {
-  console.log(`${signal} received, shutting down worker`);
-  await redis.quit();
+  if (shuttingDown) return;
+  shuttingDown = true;
+  console.log(`${signal} received: finishing active jobs, then exiting`);
+
+  setTimeout(() => {
+    console.error('Shutdown timed out, forcing exit');
+    process.exit(1);
+  }, SHUTDOWN_TIMEOUT_MS).unref();
+
+  // Stops taking new jobs and waits for the ones in progress.
+  await worker.close();
+  closeTransports();
+  await Promise.allSettled([emailQueue.close(), prisma.$disconnect(), redis.quit()]);
   process.exit(0);
 }
 
 process.on('SIGINT', () => void shutdown('SIGINT'));
 process.on('SIGTERM', () => void shutdown('SIGTERM'));
-
-main().catch((err) => {
-  console.error('Worker failed to start', err);
-  process.exit(1);
-});

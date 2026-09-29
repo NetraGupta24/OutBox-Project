@@ -4,7 +4,9 @@ import { es } from './lib/elasticsearch.js';
 import { prisma } from './lib/prisma.js';
 import { HttpError } from './lib/httpError.js';
 import { withTimeout } from './lib/async.js';
+import { env } from './config/env.js';
 import { requireAuth } from './modules/auth/requireAuth.js';
+import { BULL_BOARD_PATH, basicAuth, bullBoardRouter } from './modules/admin/bullBoard.js';
 import { campaignRouter } from './modules/campaigns/campaign.routes.js';
 import { emailRouter } from './modules/emails/email.routes.js';
 import { senderRouter } from './modules/senders/sender.routes.js';
@@ -38,6 +40,16 @@ export function createApp() {
       uptime: Math.round(process.uptime()),
     });
   });
+
+  if (env.BULL_BOARD_PASSWORD) {
+    app.use(
+      BULL_BOARD_PATH,
+      basicAuth(env.BULL_BOARD_USERNAME, env.BULL_BOARD_PASSWORD),
+      bullBoardRouter(),
+    );
+  } else {
+    console.warn(`Queue dashboard disabled: set BULL_BOARD_PASSWORD to enable ${BULL_BOARD_PATH}`);
+  }
 
   app.use('/api', requireAuth);
   app.use('/api/campaigns', campaignRouter);
