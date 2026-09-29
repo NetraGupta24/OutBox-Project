@@ -64,6 +64,7 @@ export async function previewCampaign(userId: number, input: ScheduleSettings & 
     hourWindows: plan.windowsUsed,
     effectiveDelayMs: settings.delayMs,
     effectiveHourlyLimit: settings.hourlyLimit,
+    windowMs: settings.windowMs,
   };
 }
 

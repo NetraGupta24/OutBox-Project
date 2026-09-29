@@ -1,4 +1,4 @@
-import type { EmailStatus } from '../../generated/prisma/client.js';
+import type { EmailStatus, Prisma } from '../../generated/prisma/client.js';
 import { prisma } from '../../lib/prisma.js';
 import { notFound } from '../../lib/httpError.js';
 
@@ -21,6 +21,9 @@ export type EmailListItem = {
   status: EmailStatus;
   scheduledAt: string;
   sentAt: string | null;
+  senderEmail: string;
+  previewUrl: string | null; // Ethereal web inbox link, once sent
+  error: string | null; // why it failed (or last retry reason)
 };
 
 export type Paginated<T> = {
@@ -31,6 +34,16 @@ export type Paginated<T> = {
   totalPages: number;
 };
 
+export type ListOptions = {
+  tab: EmailTab;
+  page: number;
+  pageSize: number;
+  // Narrow the tab to one status, e.g. only failed emails in Sent.
+  status?: EmailStatus;
+  // Matches recipient or subject (case-insensitive substring).
+  q?: string;
+};
+
 function preview(text: string): string {
   const flat = text.replace(/\s+/g, ' ').trim();
   return flat.length > PREVIEW_LENGTH ? `${flat.slice(0, PREVIEW_LENGTH)}…` : flat;
@@ -38,16 +51,20 @@ function preview(text: string): string {
 
 export async function listEmails(
   userId: number,
-  tab: EmailTab,
-  page: number,
-  pageSize: number,
+  { tab, page, pageSize, status, q }: ListOptions,
 ): Promise<Paginated<EmailListItem>> {
-  const where = { userId, status: { in: [...TAB_STATUSES[tab]] } };
+  const allowed: readonly EmailStatus[] = TAB_STATUSES[tab];
+  const statuses = status && allowed.includes(status) ? [status] : [...allowed];
+  const where: Prisma.EmailWhereInput = {
+    userId,
+    status: { in: statuses },
+    ...(q ? { OR: [{ recipient: { contains: q } }, { subject: { contains: q } }] } : {}),
+  };
   // Scheduled: soonest first. Sent: most recent first.
-  const orderBy =
+  const orderBy: Prisma.EmailOrderByWithRelationInput[] =
     tab === 'scheduled'
-      ? [{ scheduledAt: 'asc' as const }, { id: 'asc' as const }]
-      : [{ updatedAt: 'desc' as const }, { id: 'desc' as const }];
+      ? [{ scheduledAt: 'asc' }, { id: 'asc' }]
+      : [{ updatedAt: 'desc' }, { id: 'desc' }];
 
   const [rows, total] = await Promise.all([
     prisma.email.findMany({
@@ -55,7 +72,10 @@ export async function listEmails(
       orderBy,
       skip: (page - 1) * pageSize,
       take: pageSize,
-      include: { campaign: { select: { bodyText: true } } },
+      include: {
+        campaign: { select: { bodyText: true } },
+        sender: { select: { email: true } },
+      },
     }),
     prisma.email.count({ where }),
   ]);
@@ -70,6 +90,9 @@ export async function listEmails(
       status: row.status,
       scheduledAt: row.scheduledAt.toISOString(),
       sentAt: row.sentAt?.toISOString() ?? null,
+      senderEmail: row.sender.email,
+      previewUrl: row.previewUrl,
+      error: row.error,
     })),
     page,
     pageSize,
@@ -78,7 +101,9 @@ export async function listEmails(
   };
 }
 
-export async function countEmails(userId: number): Promise<Record<EmailTab, number>> {
+export type EmailCounts = Record<EmailTab, number> & { failed: number; delayed: number };
+
+export async function countEmails(userId: number): Promise<EmailCounts> {
   const groups = await prisma.email.groupBy({
     by: ['status'],
     where: { userId },
@@ -86,7 +111,12 @@ export async function countEmails(userId: number): Promise<Record<EmailTab, numb
   });
   const count = (statuses: readonly EmailStatus[]) =>
     groups.filter((g) => statuses.includes(g.status)).reduce((sum, g) => sum + g._count._all, 0);
-  return { scheduled: count(TAB_STATUSES.scheduled), sent: count(TAB_STATUSES.sent) };
+  return {
+    scheduled: count(TAB_STATUSES.scheduled),
+    sent: count(TAB_STATUSES.sent),
+    failed: count(['failed']),
+    delayed: count(['delayed']),
+  };
 }
 
 export async function getEmail(userId: number, emailId: number) {
@@ -111,6 +141,7 @@ export async function getEmail(userId: number, emailId: number) {
     attempts: email.attempts,
     scheduledAt: email.scheduledAt.toISOString(),
     sentAt: email.sentAt?.toISOString() ?? null,
+    messageId: email.messageId,
     previewUrl: email.previewUrl,
     error: email.error,
   };

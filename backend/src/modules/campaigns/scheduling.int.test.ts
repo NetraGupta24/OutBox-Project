@@ -4,6 +4,7 @@ import { redis } from '../../lib/redis.js';
 import { emailJobId, emailQueue, notificationQueue } from '../../queue/queues.js';
 import { reconcileEmailJobs } from '../../queue/reconcile.js';
 import { claimEmail } from '../emails/email.state.js';
+import { countEmails, listEmails } from '../emails/email.service.js';
 import { createCampaign } from './campaign.service.js';
 import type { CampaignInput } from './campaign.schema.js';
 import { createUserAndSender, resetDatabase } from '../../../test/helpers.js';
@@ -98,5 +99,58 @@ describe('reconcileEmailJobs', () => {
     expect(await emailQueue.getJobState(emailJobId(lost!.id))).toBe('delayed');
     expect(await emailQueue.getJobState(emailJobId(sent!.id))).toBe('unknown');
     expect(await emailQueue.getJobState(emailJobId(intact!.id))).toBe('delayed');
+  });
+});
+
+describe('listEmails', () => {
+  it('searches recipient and subject, filters by status and counts per tab', async () => {
+    const { campaign } = await createCampaign(
+      userId,
+      input(['alice@acme.com', 'bob@globex.com', 'carol@acme.com']),
+    );
+    const [a, b] = await prisma.email.findMany({
+      where: { campaignId: campaign.id },
+      orderBy: { id: 'asc' },
+    });
+    await prisma.email.update({
+      where: { id: a!.id },
+      data: { status: 'sent', sentAt: new Date() },
+    });
+    await prisma.email.update({
+      where: { id: b!.id },
+      data: { status: 'failed', error: '550 no such user' },
+    });
+
+    const acme = await listEmails(userId, { tab: 'scheduled', page: 1, pageSize: 25, q: 'ACME' });
+    expect(acme.items.map((e) => e.recipient)).toEqual(['carol@acme.com']);
+
+    const bySubject = await listEmails(userId, {
+      tab: 'sent',
+      page: 1,
+      pageSize: 25,
+      q: 'integration',
+    });
+    expect(bySubject.total).toBe(2);
+
+    const failed = await listEmails(userId, {
+      tab: 'sent',
+      page: 1,
+      pageSize: 25,
+      status: 'failed',
+    });
+    expect(failed.items).toMatchObject([
+      { recipient: 'bob@globex.com', error: '550 no such user' },
+    ]);
+
+    // A status from the other tab is ignored rather than leaking across tabs.
+    const wrongTab = await listEmails(userId, {
+      tab: 'scheduled',
+      page: 1,
+      pageSize: 25,
+      status: 'sent',
+    });
+    expect(wrongTab.items.map((e) => e.status)).toEqual(['scheduled']);
+
+    expect(await countEmails(userId)).toEqual({ scheduled: 1, sent: 2, failed: 1, delayed: 0 });
   });
 });

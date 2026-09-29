@@ -99,7 +99,7 @@ export async function processEmail(
     if (result.kind === 'deferred') {
       // Moved to a later window (or behind emails already waiting in this one),
       // keeping arrival order. Not a failure, so no retry attempt is used.
-      await deferEmail(emailId, result.retryAt);
+      await deferEmail(emailId, result.retryAt, { limitHit: result.scope !== 'queue' });
       await job.updateData({
         emailId,
         deferral: { window: result.targetWindow, attempt: job.attemptsMade },
