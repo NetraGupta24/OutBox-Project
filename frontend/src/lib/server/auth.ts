@@ -1,5 +1,6 @@
 import 'server-only';
 import { cookies } from 'next/headers';
+import { redirect } from 'next/navigation';
 import type { User } from '@/types/api';
 
 export const SESSION_COOKIE = 'rb_session';
@@ -25,4 +26,12 @@ export async function getSession(): Promise<SessionResult> {
   } catch {
     return { status: 'unavailable' };
   }
+}
+
+// For signed-in pages: the user, 'unavailable' if the API can't be reached,
+// or a redirect to the login page.
+export async function requireUser(): Promise<User | 'unavailable'> {
+  const session = await getSession();
+  if (session.status === 'signed-out') redirect('/login?error=expired');
+  return session.status === 'signed-in' ? session.user : 'unavailable';
 }

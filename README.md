@@ -124,19 +124,19 @@ All `/api/*` routes except sign-in need the session cookie, and only ever return
 
 To call the API from curl or Postman: sign in at http://localhost:3000, copy the `rb_session` cookie (browser dev tools → Application → Cookies), and send it as a `Cookie` header.
 
-| Method | Path                                                    | Purpose                                                            |
-| ------ | ------------------------------------------------------- | ------------------------------------------------------------------ |
-| GET    | `/api/auth/google`                                      | Start Google sign-in (optional `?returnTo=/sent`)                  |
-| GET    | `/api/auth/google/callback`                             | Where Google sends the browser back                                |
-| GET    | `/api/auth/me`                                          | The signed-in user (name, email, avatar)                           |
-| POST   | `/api/auth/logout`                                      | Sign out (clears the session cookie)                               |
-| POST   | `/api/campaigns`                                        | Schedule one email per recipient. Send an `Idempotency-Key` header |
-| POST   | `/api/campaigns/preview`                                | Projected start/finish time for a campaign, without saving         |
-| GET    | `/api/emails?status=scheduled\|sent&page=1&pageSize=25` | Scheduled or Sent list, paginated                                  |
-| GET    | `/api/emails/counts`                                    | Numbers for the sidebar                                            |
-| GET    | `/api/emails/:id`                                       | One email with its body and sender                                 |
-| GET    | `/api/senders`                                          | Senders for the Compose "From" dropdown                            |
-| GET    | `/health`                                               | MySQL, Redis and Elasticsearch status                              |
+| Method | Path                                                    | Purpose                                                                                                         |
+| ------ | ------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| GET    | `/api/auth/google`                                      | Start Google sign-in (optional `?returnTo=/sent`)                                                               |
+| GET    | `/api/auth/google/callback`                             | Where Google sends the browser back                                                                             |
+| GET    | `/api/auth/me`                                          | The signed-in user (name, email, avatar)                                                                        |
+| POST   | `/api/auth/logout`                                      | Sign out (clears the session cookie)                                                                            |
+| POST   | `/api/campaigns`                                        | Schedule one email per recipient. Send an `Idempotency-Key` header                                              |
+| POST   | `/api/campaigns/preview`                                | Projected start/finish time for a campaign, without saving                                                      |
+| GET    | `/api/emails?status=scheduled\|sent&page=1&pageSize=25` | Scheduled or Sent list, paginated. Optional `q` (recipient or subject) and `filter` (one status, e.g. `failed`) |
+| GET    | `/api/emails/counts`                                    | Numbers for the sidebar                                                                                         |
+| GET    | `/api/emails/:id`                                       | One email with its body and sender                                                                              |
+| GET    | `/api/senders`                                          | Senders for the Compose "From" dropdown                                                                         |
+| GET    | `/health`                                               | MySQL, Redis and Elasticsearch status                                                                           |
 
 Example:
 
@@ -155,6 +155,48 @@ curl -X POST http://localhost:3000/api/campaigns \
     "hourlyLimit": 50
   }'
 ```
+
+## Dashboard
+
+The frontend follows the Figma (login, Scheduled and Sent lists, email view, Compose with Send Later), with some additions:
+
+**Lists (Scheduled, Sent)**
+
+- Search by recipient or subject, and filter by status (Scheduled / Delayed, or Sent / Failed). Search, filter and page are kept in the URL, so Back and shared links keep them.
+- Refresh every 5 s while the tab is visible, plus a manual refresh button. The sidebar counts update the same way, with a red dot on Sent when something failed.
+- Each row shows a status pill (the scheduled time, _Delayed_ when a sending limit moved it, _Sending_, _Sent_ or _Failed_) and a relative time ("in 5 minutes", "2 hours ago"), with the exact time on hover.
+- Skeleton loading, empty states with a next step, error states with retry, and pagination.
+
+**Email view**
+
+- The email as sent. Its HTML is shown in a sandboxed frame, so it can't run scripts or restyle the app.
+- A delivery timeline:
+  - when the email was scheduled,
+  - when it was sent, or why it failed and after how many attempts,
+  - whether it's waiting for the next window,
+  - the Ethereal preview link and Message-ID.
+
+**Compose**
+
+- Recipients:
+  - Type, paste (any text: all addresses are picked out) or **Upload List** (CSV or TXT, addresses found in any column).
+  - Recipients show as chips (the first 3, then "+N").
+  - The upload summary shows how many addresses were detected, how many duplicates were skipped and how many invalid entries were ignored.
+- **From** lists the senders with this hour's usage. Delay and hourly limit show the limits that will actually apply.
+- A rich-text editor with the Figma toolbar: undo/redo, text size, bold/italic/underline, alignment, lists, indent, quote, strikethrough.
+- **Send Later** offers presets (Now, In 1 hour, Tomorrow 9 AM / 11 AM / 3 PM, Monday 9 AM) or any date and time. It shows a live estimate of when the last email will go out, based on the delay, the limits and the number of recipients.
+- Other details:
+  - Fields are checked before sending.
+  - `Ctrl`/`Cmd` + `Enter` schedules.
+  - Leaving with unsaved changes asks first.
+  - A double-clicked or retried Schedule can't create two campaigns (`Idempotency-Key`).
+
+**Everywhere**
+
+- Keyboard: `c` opens Compose, `/` jumps to search.
+- Toast messages for success and errors.
+- If the session expires, the next request sends you to sign in and back to the same page.
+- Works down to phone width.
 
 ## How scheduling works
 
@@ -261,6 +303,6 @@ Integration tests use their own database (`reachinbox_test`, created and migrate
 | 4   | Email worker and persistence       | Done        |
 | 5   | Rate limiting and concurrency      | Done        |
 | 6   | Google authentication              | Done        |
-| 7   | Frontend dashboard                 | Not started |
+| 7   | Frontend dashboard                 | Done        |
 | 8   | Slack and Elasticsearch            | Not started |
 | 9   | Documentation, demo and submission | Not started |
