@@ -89,12 +89,59 @@ Key constraints: `emails(campaign_id, recipient)` is unique, so a lead can't be 
 
 All times are stored in UTC.
 
+## API
+
+All `/api/*` routes are scoped to the signed-in user.
+
+> **Temporary until Google login (phase 6):** with `AUTH_DEV_BYPASS=true` (ignored in production), send an `x-dev-user-email` header to act as that user. The user is created on first use.
+
+| Method | Path | Purpose |
+|---|---|---|
+| POST | `/api/campaigns` | Schedule one email per recipient. Send an `Idempotency-Key` header |
+| POST | `/api/campaigns/preview` | Projected start/finish time for a campaign, without saving |
+| GET | `/api/emails?status=scheduled\|sent&page=1&pageSize=25` | Scheduled or Sent list, paginated |
+| GET | `/api/emails/counts` | Numbers for the sidebar |
+| GET | `/api/emails/:id` | One email with its body and sender |
+| GET | `/api/senders` | Senders for the Compose "From" dropdown |
+| GET | `/health` | MySQL, Redis and Elasticsearch status |
+
+Example:
+
+```bash
+curl -X POST http://localhost:4000/api/campaigns \
+  -H 'content-type: application/json' \
+  -H 'x-dev-user-email: you@example.com' \
+  -H 'idempotency-key: compose-2f9c1a7e' \
+  -d '{
+    "senderId": 1,
+    "subject": "Meeting follow-up",
+    "bodyHtml": "<p>Hi, just following up.</p>",
+    "recipients": ["a@example.com", "b@example.com"],
+    "startAt": "2026-10-01T10:00:00Z",
+    "delayMs": 5000,
+    "hourlyLimit": 50
+  }'
+```
+
+## How scheduling works
+
+1. **Validate and clean.** Recipients are trimmed, lowercased and de-duplicated. Any invalid address rejects the request with the list of bad ones.
+2. **Plan send times.** `schedulePlanner.ts` spaces emails `delayMs` apart from `startAt`. Rate-limit windows are fixed UTC hours: when a window already holds `hourlyLimit` emails, the next one moves to the start of the next hour, so order is kept and nothing is dropped. The settings applied can only be stricter than requested:
+   - start time: a past `startAt` becomes now
+   - delay: at least `MIN_SEND_INTERVAL_MS`
+   - hourly limit: at most the sender's cap (`MAX_EMAILS_PER_HOUR_PER_SENDER`)
+3. **Save.** The campaign and one `emails` row per recipient are written in a single MySQL transaction. MySQL is the source of truth.
+4. **Queue.** Each row gets a BullMQ delayed job with `jobId = email-<id>` and `delay = scheduledAt - now`, added in batches of 500. Because job IDs are deterministic, adding the same email again does nothing.
+
+**Idempotency.** Repeating a request with the same `Idempotency-Key` returns the original campaign (HTTP 200) instead of creating a new one, even when several arrive at once. If Redis is down, the campaign is still saved and the API answers 503; retrying with the same key queues the jobs once Redis is back.
+
 ## Useful scripts
 
 | Command | What it does |
 |---|---|
 | `npm run typecheck` | Type-checks backend and frontend |
 | `npm run lint` | Lints backend and frontend |
+| `npm test -w backend` | Runs backend unit tests (Vitest) |
 | `npm run format` | Formats the repository with Prettier |
 | `npm run db:migrate -w backend` | Applies migrations (creates new ones in development) |
 | `npm run db:studio -w backend` | Opens Prisma Studio to browse the database |
@@ -106,7 +153,7 @@ All times are stored in UTC.
 |---|---|---|
 | 1 | Setup and infrastructure | Done |
 | 2 | Database and senders | Done |
-| 3 | Core scheduling API | Not started |
+| 3 | Core scheduling API | Done |
 | 4 | Email worker and persistence | Not started |
 | 5 | Rate limiting and concurrency | Not started |
 | 6 | Google authentication | Not started |

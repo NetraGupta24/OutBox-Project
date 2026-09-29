@@ -16,10 +16,18 @@ const envSchema = z.object({
     .string()
     .regex(/^[0-9a-fA-F]{64}$/, 'must be 64 hex characters (openssl rand -hex 32)'),
 
+  // TEMPORARY until Google login (phase 6): identify API callers by the
+  // x-dev-user-email header. Ignored when NODE_ENV=production.
+  AUTH_DEV_BYPASS: z
+    .enum(['true', 'false'])
+    .default('false')
+    .transform((v) => v === 'true'),
+
   // Scheduler tuning (used from phase 4 onwards)
   WORKER_CONCURRENCY: z.coerce.number().int().min(1).default(5),
   MIN_SEND_INTERVAL_MS: z.coerce.number().int().min(0).default(2000),
   MAX_EMAILS_PER_HOUR_PER_SENDER: z.coerce.number().int().min(1).default(200),
+  MAX_RECIPIENTS_PER_CAMPAIGN: z.coerce.number().int().min(1).default(10_000),
   SMTP_DRY_RUN: z
     .enum(['true', 'false'])
     .default('false')
