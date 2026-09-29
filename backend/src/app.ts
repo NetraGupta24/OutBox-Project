@@ -3,14 +3,18 @@ import { redis } from './lib/redis.js';
 import { es } from './lib/elasticsearch.js';
 import { prisma } from './lib/prisma.js';
 import { HttpError } from './lib/httpError.js';
+import { withTimeout } from './lib/async.js';
 import { requireAuth } from './modules/auth/requireAuth.js';
 import { campaignRouter } from './modules/campaigns/campaign.routes.js';
 import { emailRouter } from './modules/emails/email.routes.js';
 import { senderRouter } from './modules/senders/sender.routes.js';
 
+const HEALTH_CHECK_TIMEOUT_MS = 2_000;
+
+// Each dependency gets a short time limit so /health always answers quickly.
 async function check(fn: () => Promise<unknown>): Promise<'up' | 'down'> {
   try {
-    await fn();
+    await withTimeout(fn(), HEALTH_CHECK_TIMEOUT_MS, 'timeout');
     return 'up';
   } catch {
     return 'down';

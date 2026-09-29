@@ -1,3 +1,5 @@
+# Local development infrastructure. Ports are published on 127.0.0.1 only,
+# because these services run without passwords or with default ones.
 name: reachinbox-scheduler
 
 services:
@@ -11,7 +13,7 @@ services:
       MYSQL_PASSWORD: ${MYSQL_PASSWORD:-reachinbox}
       TZ: UTC
     ports:
-      - '3306:3306'
+      - '127.0.0.1:3306:3306'
     volumes:
       - mysql-data:/var/lib/mysql
       - ./docker/mysql/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
@@ -47,7 +49,7 @@ services:
         'noeviction',
       ]
     ports:
-      - '6379:6379'
+      - '127.0.0.1:6379:6379'
     volumes:
       - redis-data:/data
     healthcheck:
@@ -64,7 +66,7 @@ services:
       xpack.security.enabled: 'false'
       ES_JAVA_OPTS: -Xms512m -Xmx512m
     ports:
-      - '9200:9200'
+      - '127.0.0.1:9200:9200'
     volumes:
       - es-data:/usr/share/elasticsearch/data
     healthcheck:

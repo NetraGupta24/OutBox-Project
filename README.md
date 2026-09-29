@@ -2,19 +2,19 @@
 
 A full-stack email scheduler: an Express + BullMQ backend that schedules and sends emails through Ethereal SMTP, and a Next.js dashboard to compose, schedule and track them.
 
-> Work in progress. The full design is in [`docs/PROJECT_REPORT.md`](docs/PROJECT_REPORT.md).
+> Work in progress: see the Progress table at the end.
 
 ## Tech stack
 
-| Layer | Technology |
-|---|---|
-| Backend | TypeScript, Express.js |
-| Queue | BullMQ on Redis |
-| Database | MySQL 8 |
-| Search | Elasticsearch 8 |
-| Email | Ethereal Email (SMTP) |
+| Layer    | Technology                                            |
+| -------- | ----------------------------------------------------- |
+| Backend  | TypeScript, Express.js                                |
+| Queue    | BullMQ on Redis                                       |
+| Database | MySQL 8                                               |
+| Search   | Elasticsearch 8                                       |
+| Email    | Ethereal Email (SMTP)                                 |
 | Frontend | Next.js (App Router), React, Tailwind CSS, TypeScript |
-| Infra | Docker Compose for MySQL, Redis and Elasticsearch |
+| Infra    | Docker Compose for MySQL, Redis and Elasticsearch     |
 
 ## Repository layout
 
@@ -77,13 +77,13 @@ Add `-- --verify` to check each SMTP login. The script is safe to re-run. Passwo
 
 MySQL is the source of truth. The schema lives in `backend/prisma/schema.prisma`, and migrations in `backend/prisma/migrations`.
 
-| Table | Purpose |
-|---|---|
-| `users` | Google accounts that have signed in |
-| `senders` | SMTP accounts emails are sent from (encrypted passwords) |
-| `campaigns` | One Compose submission: subject, body, start time, delay, hourly limit |
-| `emails` | One row per recipient, with status `scheduled → sending → sent/failed` (or `delayed` when rate-limited) |
-| `slack_integrations` | Per-user Slack webhook (encrypted) for rate-limit alerts |
+| Table                | Purpose                                                                                                 |
+| -------------------- | ------------------------------------------------------------------------------------------------------- |
+| `users`              | Google accounts that have signed in                                                                     |
+| `senders`            | SMTP accounts emails are sent from (encrypted passwords)                                                |
+| `campaigns`          | One Compose submission: subject, body, start time, delay, hourly limit                                  |
+| `emails`             | One row per recipient, with status `scheduled → sending → sent/failed` (or `delayed` when rate-limited) |
+| `slack_integrations` | Per-user Slack webhook (encrypted) for rate-limit alerts                                                |
 
 Key constraints: `emails(campaign_id, recipient)` is unique, so a lead can't be scheduled twice in one campaign, and `campaigns(user_id, idempotency_key)` is unique, so a double-clicked Schedule creates one campaign.
 
@@ -95,15 +95,15 @@ All `/api/*` routes are scoped to the signed-in user.
 
 > **Temporary until Google login (phase 6):** with `AUTH_DEV_BYPASS=true` (ignored in production), send an `x-dev-user-email` header to act as that user. The user is created on first use.
 
-| Method | Path | Purpose |
-|---|---|---|
-| POST | `/api/campaigns` | Schedule one email per recipient. Send an `Idempotency-Key` header |
-| POST | `/api/campaigns/preview` | Projected start/finish time for a campaign, without saving |
-| GET | `/api/emails?status=scheduled\|sent&page=1&pageSize=25` | Scheduled or Sent list, paginated |
-| GET | `/api/emails/counts` | Numbers for the sidebar |
-| GET | `/api/emails/:id` | One email with its body and sender |
-| GET | `/api/senders` | Senders for the Compose "From" dropdown |
-| GET | `/health` | MySQL, Redis and Elasticsearch status |
+| Method | Path                                                    | Purpose                                                            |
+| ------ | ------------------------------------------------------- | ------------------------------------------------------------------ |
+| POST   | `/api/campaigns`                                        | Schedule one email per recipient. Send an `Idempotency-Key` header |
+| POST   | `/api/campaigns/preview`                                | Projected start/finish time for a campaign, without saving         |
+| GET    | `/api/emails?status=scheduled\|sent&page=1&pageSize=25` | Scheduled or Sent list, paginated                                  |
+| GET    | `/api/emails/counts`                                    | Numbers for the sidebar                                            |
+| GET    | `/api/emails/:id`                                       | One email with its body and sender                                 |
+| GET    | `/api/senders`                                          | Senders for the Compose "From" dropdown                            |
+| GET    | `/health`                                               | MySQL, Redis and Elasticsearch status                              |
 
 Example:
 
@@ -137,26 +137,26 @@ curl -X POST http://localhost:4000/api/campaigns \
 
 ## Useful scripts
 
-| Command | What it does |
-|---|---|
-| `npm run typecheck` | Type-checks backend and frontend |
-| `npm run lint` | Lints backend and frontend |
-| `npm test -w backend` | Runs backend unit tests (Vitest) |
-| `npm run format` | Formats the repository with Prettier |
-| `npm run db:migrate -w backend` | Applies migrations (creates new ones in development) |
-| `npm run db:studio -w backend` | Opens Prisma Studio to browse the database |
-| `npm run seed:senders -w backend` | Creates or updates the Ethereal senders |
+| Command                           | What it does                                         |
+| --------------------------------- | ---------------------------------------------------- |
+| `npm run typecheck`               | Type-checks backend and frontend                     |
+| `npm run lint`                    | Lints backend and frontend                           |
+| `npm test -w backend`             | Runs backend unit tests (Vitest)                     |
+| `npm run format`                  | Formats the repository with Prettier                 |
+| `npm run db:migrate -w backend`   | Applies migrations (creates new ones in development) |
+| `npm run db:studio -w backend`    | Opens Prisma Studio to browse the database           |
+| `npm run seed:senders -w backend` | Creates or updates the Ethereal senders              |
 
 ## Progress
 
-| # | Phase | Status |
-|---|---|---|
-| 1 | Setup and infrastructure | Done |
-| 2 | Database and senders | Done |
-| 3 | Core scheduling API | Done |
-| 4 | Email worker and persistence | Not started |
-| 5 | Rate limiting and concurrency | Not started |
-| 6 | Google authentication | Not started |
-| 7 | Frontend dashboard | Not started |
-| 8 | Slack and Elasticsearch | Not started |
-| 9 | Documentation, demo and submission | Not started |
+| #   | Phase                              | Status      |
+| --- | ---------------------------------- | ----------- |
+| 1   | Setup and infrastructure           | Done        |
+| 2   | Database and senders               | Done        |
+| 3   | Core scheduling API                | Done        |
+| 4   | Email worker and persistence       | Not started |
+| 5   | Rate limiting and concurrency      | Not started |
+| 6   | Google authentication              | Not started |
+| 7   | Frontend dashboard                 | Not started |
+| 8   | Slack and Elasticsearch            | Not started |
+| 9   | Documentation, demo and submission | Not started |

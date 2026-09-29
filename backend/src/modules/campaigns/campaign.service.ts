@@ -2,6 +2,7 @@ import { Prisma } from '../../generated/prisma/client.js';
 import { env } from '../../config/env.js';
 import { prisma } from '../../lib/prisma.js';
 import { HttpError, badRequest } from '../../lib/httpError.js';
+import { withTimeout } from '../../lib/async.js';
 import { emailJobId, emailQueue } from '../../queue/queues.js';
 import { getUsableSender, senderHourlyLimit } from '../senders/sender.service.js';
 import { planSchedule } from './schedulePlanner.js';
@@ -12,14 +13,8 @@ const ENQUEUE_CHUNK_SIZE = 500;
 // BullMQ waits for Redis to be ready before running commands, so an outage
 // would otherwise hang the request.
 const ENQUEUE_TIMEOUT_MS = 5_000;
-
-function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promise<T> {
-  let timer: NodeJS.Timeout;
-  const timeout = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => reject(new Error(message)), ms);
-  });
-  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
-}
+// 10,000 rows take ~3 s locally; Prisma's 5 s default is too tight for slower machines.
+const CREATE_TX_TIMEOUT_MS = 30_000;
 
 type ScheduleSettings = {
   senderId: number;
@@ -133,9 +128,9 @@ async function replay(
   // Re-enqueue in case the original request failed after the DB commit.
   await withTimeout(enqueueCampaign(existing.id), ENQUEUE_TIMEOUT_MS, 'Queue unavailable').catch(
     (err) => {
+      console.error(`Campaign ${existing.id} replay could not be queued:`, (err as Error).message);
       throw new HttpError(503, 'Campaign exists but could not be queued. Retry shortly.', {
         campaignId: existing.id,
-        reason: (err as Error).message,
       });
     },
   );
@@ -165,33 +160,36 @@ export async function createCampaign(
 
   let campaignId: number;
   try {
-    campaignId = await prisma.$transaction(async (tx) => {
-      const campaign = await tx.campaign.create({
-        data: {
-          userId,
-          senderId: settings.sender.id,
-          subject: input.subject,
-          bodyHtml: input.bodyHtml,
-          bodyText: input.bodyText ?? htmlToText(input.bodyHtml),
-          startAt: new Date(settings.startAt),
-          delayMs: settings.delayMs,
-          hourlyLimit: settings.hourlyLimit,
-          total: valid.length,
-          idempotencyKey: idempotencyKey ?? null,
-        },
-      });
-      await tx.email.createMany({
-        data: valid.map((recipient, i) => ({
-          campaignId: campaign.id,
-          userId,
-          senderId: settings.sender.id,
-          recipient,
-          subject: input.subject,
-          scheduledAt: new Date(plan.times[i]!),
-        })),
-      });
-      return campaign.id;
-    });
+    campaignId = await prisma.$transaction(
+      async (tx) => {
+        const campaign = await tx.campaign.create({
+          data: {
+            userId,
+            senderId: settings.sender.id,
+            subject: input.subject,
+            bodyHtml: input.bodyHtml,
+            bodyText: input.bodyText ?? htmlToText(input.bodyHtml),
+            startAt: new Date(settings.startAt),
+            delayMs: settings.delayMs,
+            hourlyLimit: settings.hourlyLimit,
+            total: valid.length,
+            idempotencyKey: idempotencyKey ?? null,
+          },
+        });
+        await tx.email.createMany({
+          data: valid.map((recipient, i) => ({
+            campaignId: campaign.id,
+            userId,
+            senderId: settings.sender.id,
+            recipient,
+            subject: input.subject,
+            scheduledAt: new Date(plan.times[i]!),
+          })),
+        });
+        return campaign.id;
+      },
+      { timeout: CREATE_TX_TIMEOUT_MS, maxWait: 10_000 },
+    );
   } catch (err) {
     // Two concurrent requests with the same key: the loser returns the winner's campaign.
     if (
