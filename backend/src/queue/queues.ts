@@ -3,6 +3,7 @@ import { createRedisConnection } from '../lib/redis.js';
 
 export const EMAIL_QUEUE = 'email';
 export const NOTIFICATION_QUEUE = 'notification';
+export const SEARCH_INDEX_QUEUE = 'search-index';
 const ENQUEUE_CHUNK_SIZE = 500;
 
 export type EmailJobData = {
@@ -59,9 +60,30 @@ export const notificationQueue = new Queue<NotificationJobData>(NOTIFICATION_QUE
   },
 });
 
+export type SearchIndexJobData = { emailIds: number[] };
+
+// Keeps Elasticsearch in step with MySQL. Retries for a while if Elasticsearch
+// is down; sending never waits on it.
+export const searchIndexQueue = new Queue<SearchIndexJobData>(SEARCH_INDEX_QUEUE, {
+  connection: producerConnection,
+  defaultJobOptions: {
+    attempts: 10,
+    backoff: { type: 'exponential', delay: 2_000 },
+    removeOnComplete: { count: 1000 },
+    removeOnFail: { age: 7 * 24 * 3600 },
+  },
+});
+
+export async function queueSearchIndex(emailIds: number[]): Promise<void> {
+  for (let i = 0; i < emailIds.length; i += ENQUEUE_CHUNK_SIZE) {
+    await searchIndexQueue.add('index', { emailIds: emailIds.slice(i, i + ENQUEUE_CHUNK_SIZE) });
+  }
+}
+
 // Connection errors are already logged by the connection itself.
 emailQueue.on('error', () => {});
 notificationQueue.on('error', () => {});
+searchIndexQueue.on('error', () => {});
 
 export type EmailToQueue = { id: number; scheduledAt: Date };
 

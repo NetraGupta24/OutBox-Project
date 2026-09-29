@@ -30,6 +30,7 @@ export type Paginated<T> = {
   pageSize: number;
   total: number;
   totalPages: number;
+  searchedWith?: 'elasticsearch' | 'database';
 };
 
 export type EmailCounts = {
@@ -99,4 +100,13 @@ export type CreateCampaignResult = {
 export type ApiErrorBody = {
   error: string;
   details?: unknown;
+};
+
+export type SlackStatus = {
+  configured: boolean;
+  connected: boolean;
+  teamName: string | null;
+  channel: string | null;
+  connectedAt: string | null;
+  disconnectedBySlack: boolean;
 };

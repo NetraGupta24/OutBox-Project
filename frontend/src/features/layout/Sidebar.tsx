@@ -1,6 +1,7 @@
 import Link from 'next/link';
 import { PenSquare } from 'lucide-react';
 import type { User } from '@/types/api';
+import { SlackCard } from '@/features/slack/SlackCard';
 import { SidebarNav } from './SidebarNav';
 import { UserMenu } from './UserMenu';
 
@@ -23,6 +24,10 @@ export function Sidebar({ user }: { user: User }) {
       </Link>
 
       <SidebarNav />
+
+      <div className="hidden md:mt-auto md:block">
+        <SlackCard />
+      </div>
     </aside>
   );
 }

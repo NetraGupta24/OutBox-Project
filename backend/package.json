@@ -19,7 +19,8 @@
     "postinstall": "prisma generate",
     "test": "vitest run",
     "test:integration": "vitest run --config vitest.integration.config.ts",
-    "load-test": "tsx src/scripts/loadTest.ts"
+    "load-test": "tsx src/scripts/loadTest.ts",
+    "search:reindex": "tsx src/scripts/reindexSearch.ts"
   },
   "dependencies": {
     "@bull-board/api": "^9.10.2",

@@ -1,16 +1,24 @@
 import { env } from './config/env.js';
 import { prisma } from './lib/prisma.js';
 import { redis } from './lib/redis.js';
-import { emailQueue, notificationQueue } from './queue/queues.js';
+import { emailQueue, notificationQueue, searchIndexQueue } from './queue/queues.js';
 import { reconcileEmailJobs } from './queue/reconcile.js';
 import { closeTransports } from './modules/senders/transportPool.js';
 import { createEmailWorker } from './workers/email.worker.js';
 import { createNotificationWorker } from './workers/notification.worker.js';
+import { createSearchIndexWorker } from './workers/searchIndex.worker.js';
+import { ensureEmailIndex } from './modules/search/emailIndex.js';
 
 const SHUTDOWN_TIMEOUT_MS = 30_000;
 
 const worker = createEmailWorker();
 const notificationWorker = createNotificationWorker();
+const searchIndexWorker = createSearchIndexWorker();
+ensureEmailIndex().then(
+  () => console.log('Search index ready'),
+  (err) =>
+    console.warn(`Search index not ready yet (${(err as Error).message}); indexing will retry`),
+);
 const windowLabel =
   env.RATE_LIMIT_WINDOW_MS === 3_600_000 ? 'hour' : `${env.RATE_LIMIT_WINDOW_MS / 1000}s window`;
 console.log(
@@ -63,11 +71,12 @@ async function shutdown(signal: string) {
   }, SHUTDOWN_TIMEOUT_MS).unref();
 
   // Stops taking new jobs and waits for the ones in progress.
-  await Promise.allSettled([worker.close(), notificationWorker.close()]);
+  await Promise.allSettled([worker.close(), notificationWorker.close(), searchIndexWorker.close()]);
   closeTransports();
   await Promise.allSettled([
     emailQueue.close(),
     notificationQueue.close(),
+    searchIndexQueue.close(),
     prisma.$disconnect(),
     redis.quit(),
   ]);

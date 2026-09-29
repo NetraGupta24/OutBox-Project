@@ -3,7 +3,7 @@ import { env } from '../../config/env.js';
 import { prisma } from '../../lib/prisma.js';
 import { HttpError, badRequest } from '../../lib/httpError.js';
 import { withTimeout } from '../../lib/async.js';
-import { enqueueEmails } from '../../queue/queues.js';
+import { enqueueEmails, queueSearchIndex } from '../../queue/queues.js';
 import { getUsableSender, senderHourlyLimit } from '../senders/sender.service.js';
 import { planSchedule } from './schedulePlanner.js';
 import { htmlToText, normalizeRecipients } from './recipients.js';
@@ -81,6 +81,7 @@ export async function enqueueCampaign(campaignId: number): Promise<number> {
   });
 
   await enqueueEmails(pending);
+  await queueSearchIndex(pending.map((email) => email.id));
   return pending.length;
 }
 

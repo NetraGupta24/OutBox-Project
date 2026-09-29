@@ -65,6 +65,9 @@ services:
       discovery.type: single-node
       xpack.security.enabled: 'false'
       ES_JAVA_OPTS: -Xms512m -Xmx512m
+      # Local dev only: otherwise Elasticsearch refuses to create indexes once
+      # the machine's disk is over 90% full, and indexing silently stalls.
+      cluster.routing.allocation.disk.threshold_enabled: 'false'
     ports:
       - '127.0.0.1:9200:9200'
     volumes:

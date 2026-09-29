@@ -59,3 +59,8 @@ body {
   padding-left: 0.8em;
   color: var(--color-ink-muted);
 }
+
+/* Search boxes have their own clear button */
+input[type='search']::-webkit-search-cancel-button {
+  appearance: none;
+}

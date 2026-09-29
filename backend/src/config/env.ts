@@ -16,6 +16,7 @@ const envSchema = z.object({
   DB_POOL_SIZE: z.coerce.number().int().min(1).default(10),
   REDIS_URL: z.string().min(1).default('redis://localhost:6379'),
   ELASTICSEARCH_URL: z.url().default('http://localhost:9200'),
+  ELASTICSEARCH_INDEX: z.string().min(1).default('emails'),
 
   // 32-byte key (64 hex chars) for encrypting secrets at rest. Generate: openssl rand -hex 32
   ENCRYPTION_KEY: z
@@ -31,6 +32,16 @@ const envSchema = z.object({
   // Must match an Authorized redirect URI of the OAuth client.
   // Default: FRONTEND_URL + /api/auth/google/callback (through the Next.js proxy).
   GOOGLE_CALLBACK_URL: z
+    .union([z.literal(''), z.url()])
+    .optional()
+    .transform((v) => v || undefined),
+
+  // Slack app (api.slack.com/apps) for rate-limit alerts. Without them the rest
+  // of the app works, and "Connect Slack" explains what's missing.
+  SLACK_CLIENT_ID: optionalString,
+  SLACK_CLIENT_SECRET: optionalString,
+  // Must match a Redirect URL of the Slack app. Default: FRONTEND_URL + the callback path.
+  SLACK_REDIRECT_URI: z
     .union([z.literal(''), z.url()])
     .optional()
     .transform((v) => v || undefined),
@@ -70,5 +81,7 @@ export const env = {
   ...parsed.data,
   GOOGLE_CALLBACK_URL:
     parsed.data.GOOGLE_CALLBACK_URL ?? `${parsed.data.FRONTEND_URL}/api/auth/google/callback`,
+  SLACK_REDIRECT_URI:
+    parsed.data.SLACK_REDIRECT_URI ?? `${parsed.data.FRONTEND_URL}/api/integrations/slack/callback`,
 };
 export type Env = typeof env;

@@ -230,6 +230,14 @@ export function EmailListView({ tab }: { tab: EmailTab }) {
         <div className="flex items-center justify-between gap-3 border-t border-border px-4 py-2 text-xs text-ink-muted sm:px-6">
           <span>
             {first.toLocaleString()}–{last.toLocaleString()} of {data.total.toLocaleString()}
+            {data.searchedWith && (
+              <span className="ml-2" title="Search engine used for this search">
+                ·{' '}
+                {data.searchedWith === 'elasticsearch'
+                  ? 'Searched with Elasticsearch'
+                  : 'Basic search (Elasticsearch unavailable)'}
+              </span>
+            )}
             {error && <span className="ml-2 text-red-600">· Refresh failed</span>}
           </span>
           <span className="flex items-center gap-1">

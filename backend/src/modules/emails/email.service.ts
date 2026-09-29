@@ -1,6 +1,8 @@
 import type { EmailStatus, Prisma } from '../../generated/prisma/client.js';
 import { prisma } from '../../lib/prisma.js';
 import { notFound } from '../../lib/httpError.js';
+import { errorMessage } from '../../lib/errors.js';
+import { searchEmailIds } from '../search/emailIndex.js';
 
 // Dashboard tabs map to groups of row statuses.
 export const TAB_STATUSES = {
@@ -32,6 +34,8 @@ export type Paginated<T> = {
   pageSize: number;
   total: number;
   totalPages: number;
+  // Set for searches: which engine answered.
+  searchedWith?: 'elasticsearch' | 'database';
 };
 
 export type ListOptions = {
@@ -49,20 +53,98 @@ function preview(text: string): string {
   return flat.length > PREVIEW_LENGTH ? `${flat.slice(0, PREVIEW_LENGTH)}…` : flat;
 }
 
+const listInclude = {
+  campaign: { select: { bodyText: true } },
+  sender: { select: { email: true } },
+} as const;
+
+type ListRow = Prisma.EmailGetPayload<{ include: typeof listInclude }>;
+
+function toListItem(row: ListRow): EmailListItem {
+  return {
+    id: row.id,
+    campaignId: row.campaignId,
+    recipient: row.recipient,
+    subject: row.subject,
+    preview: preview(row.campaign.bodyText),
+    status: row.status,
+    scheduledAt: row.scheduledAt.toISOString(),
+    sentAt: row.sentAt?.toISOString() ?? null,
+    senderEmail: row.sender.email,
+    previewUrl: row.previewUrl,
+    error: row.error,
+  };
+}
+
+function page<T>(items: T[], opts: ListOptions, total: number): Paginated<T> {
+  return {
+    items,
+    page: opts.page,
+    pageSize: opts.pageSize,
+    total,
+    totalPages: Math.max(1, Math.ceil(total / opts.pageSize)),
+  };
+}
+
+function tabStatuses({ tab, status }: ListOptions): EmailStatus[] {
+  const allowed: readonly EmailStatus[] = TAB_STATUSES[tab];
+  return status && allowed.includes(status) ? [status] : [...allowed];
+}
+
+// Search with Elasticsearch; the rows themselves come from MySQL, in the
+// order Elasticsearch ranked them.
+async function searchWithElasticsearch(userId: number, opts: ListOptions & { q: string }) {
+  const statuses = tabStatuses(opts);
+  const { ids, total } = await searchEmailIds({
+    userId,
+    statuses,
+    q: opts.q,
+    from: (opts.page - 1) * opts.pageSize,
+    size: opts.pageSize,
+    newestFirst: opts.tab === 'sent',
+  });
+  const rows = await prisma.email.findMany({
+    where: { id: { in: ids }, userId, status: { in: statuses } },
+    include: listInclude,
+  });
+  const byId = new Map(rows.map((row) => [row.id, row]));
+  const items = ids.flatMap((id) => {
+    const row = byId.get(id);
+    return row ? [toListItem(row)] : [];
+  });
+  return { ...page(items, opts, total), searchedWith: 'elasticsearch' as const };
+}
+
+let warnedSearchFallback = false;
+
 export async function listEmails(
   userId: number,
-  { tab, page, pageSize, status, q }: ListOptions,
+  opts: ListOptions,
 ): Promise<Paginated<EmailListItem>> {
-  const allowed: readonly EmailStatus[] = TAB_STATUSES[tab];
-  const statuses = status && allowed.includes(status) ? [status] : [...allowed];
+  if (opts.q) {
+    try {
+      const result = await searchWithElasticsearch(userId, { ...opts, q: opts.q });
+      warnedSearchFallback = false;
+      return result;
+    } catch (err) {
+      // Search keeps working (more simply) while Elasticsearch is unavailable.
+      if (!warnedSearchFallback) {
+        console.warn(`Elasticsearch search failed, using MySQL instead: ${errorMessage(err)}`);
+        warnedSearchFallback = true;
+      }
+    }
+  }
+
   const where: Prisma.EmailWhereInput = {
     userId,
-    status: { in: statuses },
-    ...(q ? { OR: [{ recipient: { contains: q } }, { subject: { contains: q } }] } : {}),
+    status: { in: tabStatuses(opts) },
+    ...(opts.q
+      ? { OR: [{ recipient: { contains: opts.q } }, { subject: { contains: opts.q } }] }
+      : {}),
   };
   // Scheduled: soonest first. Sent: most recent first.
   const orderBy: Prisma.EmailOrderByWithRelationInput[] =
-    tab === 'scheduled'
+    opts.tab === 'scheduled'
       ? [{ scheduledAt: 'asc' }, { id: 'asc' }]
       : [{ updatedAt: 'desc' }, { id: 'desc' }];
 
@@ -70,34 +152,15 @@ export async function listEmails(
     prisma.email.findMany({
       where,
       orderBy,
-      skip: (page - 1) * pageSize,
-      take: pageSize,
-      include: {
-        campaign: { select: { bodyText: true } },
-        sender: { select: { email: true } },
-      },
+      skip: (opts.page - 1) * opts.pageSize,
+      take: opts.pageSize,
+      include: listInclude,
     }),
     prisma.email.count({ where }),
   ]);
-
   return {
-    items: rows.map((row) => ({
-      id: row.id,
-      campaignId: row.campaignId,
-      recipient: row.recipient,
-      subject: row.subject,
-      preview: preview(row.campaign.bodyText),
-      status: row.status,
-      scheduledAt: row.scheduledAt.toISOString(),
-      sentAt: row.sentAt?.toISOString() ?? null,
-      senderEmail: row.sender.email,
-      previewUrl: row.previewUrl,
-      error: row.error,
-    })),
-    page,
-    pageSize,
-    total,
-    totalPages: Math.max(1, Math.ceil(total / pageSize)),
+    ...page(rows.map(toListItem), opts, total),
+    ...(opts.q ? { searchedWith: 'database' as const } : {}),
   };
 }
 

@@ -13,6 +13,7 @@ import { BULL_BOARD_PATH, basicAuth, bullBoardRouter } from './modules/admin/bul
 import { campaignRouter } from './modules/campaigns/campaign.routes.js';
 import { emailRouter } from './modules/emails/email.routes.js';
 import { senderRouter } from './modules/senders/sender.routes.js';
+import { slackRouter } from './modules/slack/slack.routes.js';
 
 const HEALTH_CHECK_TIMEOUT_MS = 2_000;
 
@@ -65,6 +66,7 @@ export function createApp() {
   app.use('/api/campaigns', campaignRouter);
   app.use('/api/emails', emailRouter);
   app.use('/api/senders', senderRouter);
+  app.use('/api/integrations/slack', slackRouter);
 
   app.use((_req, res) => {
     res.status(404).json({ error: 'Not found' });

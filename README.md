@@ -93,6 +93,50 @@ The redirect URI points at the frontend because the frontend proxies `/api/*` to
 
 The login page shows the email and password fields from the design, disabled: only Google sign-in is supported.
 
+## Slack alerts
+
+Each user can connect Slack from the card at the bottom of the sidebar. When one of their senders (or campaigns) reaches its hourly limit, a message is posted to the channel they picked, once per limit per window. It says who hit the limit and when sending resumes, shown in each reader's own time zone.
+
+**Setup**
+
+1. Create an app at https://api.slack.com/apps (**From scratch**), in a workspace you can install apps to.
+2. **OAuth & Permissions**:
+   - Add the Redirect URL `http://localhost:3000/api/integrations/slack/callback`.
+   - Under **Scopes → Bot Token Scopes**, add `incoming-webhook`.
+3. **Basic Information**: copy the Client ID and Client Secret into `SLACK_CLIENT_ID` and `SLACK_CLIENT_SECRET` in `backend/.env`. Restart the API and the worker.
+4. In the dashboard, click **Connect Slack**, pick a channel, then **Send test** to check a message arrives.
+
+Slack may refuse a plain `http://localhost` redirect URL. If it does, expose the frontend over HTTPS (for example with a tunnel such as `cloudflared tunnel --url http://localhost:3000`), then:
+
+- use `https://<tunnel-host>/api/integrations/slack/callback` as the Redirect URL,
+- set `SLACK_REDIRECT_URI` to it,
+- open the dashboard through the tunnel while connecting.
+
+**How it works**
+
+- **Connecting:** Slack's OAuth v2 flow with the `incoming-webhook` scope. The `state` is signed and names the user who started it, so a callback can't attach a Slack channel to a different account. The webhook URL Slack returns is stored encrypted.
+- **Sending alerts:** alerts go through the `notification` queue, so a Slack outage never affects email sending. Temporary Slack errors are retried.
+- **Not connected:** alerts are simply skipped, and nothing fails. Connecting later works at once, with no redeploy: the webhook is looked up for every message.
+- **Webhook removed on Slack's side** (channel deleted, app uninstalled): it's marked disconnected, and the card asks the user to reconnect. **Disconnect** removes the stored webhook.
+
+## Search (Elasticsearch)
+
+The search box in the Scheduled and Sent lists uses Elasticsearch:
+
+- It matches recipient, subject and body as you type ("lead1", "follo").
+- Results stay in the current tab and status filter, and only include the signed-in user's emails.
+
+**How it stays in sync**
+
+- Every new email, and every status change, queues a `search-index` job. The worker writes the email's current MySQL state to the `emails` index.
+- If Elasticsearch is down, those jobs retry, and sending is never affected.
+- MySQL stays the source of truth: search results are loaded back from MySQL, so they always show the current status.
+- While Elasticsearch is unavailable, search falls back to a simpler MySQL search. The list footer says which engine answered.
+
+To rebuild the index from MySQL: `npm run search:reindex -w backend` (add `-- --fresh` to recreate it first).
+
+The Docker setup turns off Elasticsearch's disk-space safety check (`cluster.routing.allocation.disk.threshold_enabled`). Without that, a laptop disk over 90% full makes Elasticsearch refuse to create the index. Keep the check on in production.
+
 ## Ethereal setup
 
 [Ethereal](https://ethereal.email) is a fake SMTP service: it accepts emails and shows them in a web inbox, but never delivers them. The app sends from several Ethereal accounts ("senders").
@@ -130,6 +174,10 @@ To call the API from curl or Postman: sign in at http://localhost:3000, copy the
 | GET    | `/api/auth/google/callback`                             | Where Google sends the browser back                                                                             |
 | GET    | `/api/auth/me`                                          | The signed-in user (name, email, avatar)                                                                        |
 | POST   | `/api/auth/logout`                                      | Sign out (clears the session cookie)                                                                            |
+| GET    | `/api/integrations/slack`                               | Slack connection status                                                                                         |
+| GET    | `/api/integrations/slack/connect`                       | Start connecting Slack (then `/callback`)                                                                       |
+| POST   | `/api/integrations/slack/test`                          | Send a test message to the connected channel                                                                    |
+| DELETE | `/api/integrations/slack`                               | Disconnect Slack                                                                                                |
 | POST   | `/api/campaigns`                                        | Schedule one email per recipient. Send an `Idempotency-Key` header                                              |
 | POST   | `/api/campaigns/preview`                                | Projected start/finish time for a campaign, without saving                                                      |
 | GET    | `/api/emails?status=scheduled\|sent&page=1&pageSize=25` | Scheduled or Sent list, paginated. Optional `q` (recipient or subject) and `filter` (one status, e.g. `failed`) |
@@ -252,7 +300,7 @@ The one unavoidable gap: if a worker is killed after the SMTP server accepted a 
 
 **Order.** Emails moved into a window go first there. While any are still waiting, a newly due email queues behind them instead of going straight out, so a later email never overtakes an earlier one, even across campaigns sharing a sender.
 
-**When a limit is reached**, a "limit reached" notification is queued once per sender (or campaign), per user, per window. Phase 8 delivers it to Slack; for now the worker logs it.
+**When a limit is reached**, a "limit reached" notification is queued once per sender (or campaign), per user, per window, and posted to that user's Slack (see [Slack alerts](#slack-alerts)).
 
 **Behaviour under load.** 1,000 emails due at the same moment on one sender (200/hour, 2 s apart) go out 200 per hour over 5 hours, 2 s apart, in order. Scheduling them takes about 0.4 s: the rows are saved and 1,000 delayed jobs added in batches. `npm run load-test -w backend` runs this scenario through the real Redis script with a simulated clock, so hours of sending are checked in about a second. It prints the per-window counts and pass/fail checks for drops, duplicates, limits, spacing and order. Options: `--emails`, `--senders`, `--campaigns`, `--sender-limit`, `--campaign-limit`, `--interval`, `--workers`, `--planned`.
 
@@ -291,7 +339,7 @@ To see it: schedule a few emails a minute apart, stop the API and worker, wait u
 | `npm run db:studio -w backend`        | Opens Prisma Studio to browse the database                               |
 | `npm run seed:senders -w backend`     | Creates or updates the Ethereal senders                                  |
 
-Integration tests use their own database (`reachinbox_test`, created and migrated automatically) and Redis database 15, so they never touch development data. They cover Google sign-in (state and PKCE, callback errors, safe return paths, sessions, logout; only the call to Google's token endpoint is faked), the rate limiter (limits, spacing, order, 200 parallel reservations), duplicate-request handling, the send claim race, and job reconciliation.
+Integration tests use their own database (`reachinbox_test`, created and migrated automatically) and Redis database 15, so they never touch development data. They cover Slack (connect, state checks, test message, alerts, not connected, removed webhook, retries), search (as-you-type matching, per-user results, filters, MySQL fallback), Google sign-in (state and PKCE, callback errors, safe return paths, sessions, logout; only the call to Google's token endpoint is faked), the rate limiter (limits, spacing, order, 200 parallel reservations), duplicate-request handling, the send claim race, and job reconciliation.
 
 ## Progress
 
@@ -304,5 +352,5 @@ Integration tests use their own database (`reachinbox_test`, created and migrate
 | 5   | Rate limiting and concurrency      | Done        |
 | 6   | Google authentication              | Done        |
 | 7   | Frontend dashboard                 | Done        |
-| 8   | Slack and Elasticsearch            | Not started |
+| 8   | Slack and Elasticsearch            | Done        |
 | 9   | Documentation, demo and submission | Not started |

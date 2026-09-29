@@ -2,7 +2,7 @@ import { DelayedError, UnrecoverableError, Worker, type Job } from 'bullmq';
 import { env } from '../config/env.js';
 import { prisma } from '../lib/prisma.js';
 import { createRedisConnection } from '../lib/redis.js';
-import { EMAIL_QUEUE, type EmailJobData } from '../queue/queues.js';
+import { EMAIL_QUEUE, queueSearchIndex, type EmailJobData } from '../queue/queues.js';
 import {
   claimEmail,
   deferEmail,
@@ -30,6 +30,14 @@ async function loadEmail(emailId: number) {
       sender: true,
     },
   });
+}
+
+// Keeps the search index in step after a status change. Best effort: the
+// index-rebuild script covers anything missed.
+function reindex(emailId: number) {
+  void queueSearchIndex([emailId]).catch((err) =>
+    console.error(`[email-${emailId}] could not queue search indexing:`, errorMessage(err)),
+  );
 }
 
 export async function processEmail(
@@ -100,6 +108,7 @@ export async function processEmail(
       // Moved to a later window (or behind emails already waiting in this one),
       // keeping arrival order. Not a failure, so no retry attempt is used.
       await deferEmail(emailId, result.retryAt, { limitHit: result.scope !== 'queue' });
+      reindex(emailId);
       await job.updateData({
         emailId,
         deferral: { window: result.targetWindow, attempt: job.attemptsMade },
@@ -152,9 +161,11 @@ export async function processEmail(
       const lastAttempt = job.attemptsMade + 1 >= (job.opts.attempts ?? 1);
       if (permanent || lastAttempt) {
         await markFailed(emailId, message);
+        reindex(emailId);
         if (permanent) throw new UnrecoverableError(message);
       } else {
         await releaseForRetry(emailId, message);
+        reindex(emailId);
       }
       throw err;
     }
@@ -166,6 +177,7 @@ export async function processEmail(
 
   // If this throws, BullMQ retries the job and the marker prevents a second send.
   await markSent(emailId, delivery);
+  reindex(emailId);
   return { outcome: 'sent', messageId: delivery.messageId, resumed };
 }
 
