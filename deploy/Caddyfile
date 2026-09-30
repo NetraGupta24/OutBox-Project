@@ -1,0 +1,8 @@
+# HTTPS in front of the web app (docker-compose.prod.yml, profile "https").
+# Caddy gets and renews a Let's Encrypt certificate for DOMAIN by itself;
+# ports 80 and 443 must be open to the internet and DOMAIN must point here.
+{$DOMAIN} {
+	encode zstd gzip
+	header Strict-Transport-Security "max-age=31536000"
+	reverse_proxy web:3000
+}

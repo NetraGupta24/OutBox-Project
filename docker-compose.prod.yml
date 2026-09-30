@@ -3,8 +3,9 @@
 #   cp .env.production.example .env.production   # then fill it in
 #   docker compose -f docker-compose.prod.yml --env-file .env.production up -d --build
 #
-# Only the web app is published (APP_PORT, default 3000). Put an HTTPS reverse
-# proxy (Caddy, nginx, a cloud load balancer) in front of it.
+# HTTPS: add --profile https to also run Caddy, which serves DOMAIN on ports
+# 80/443 with an automatic Let's Encrypt certificate. Without it, the web app
+# listens on 127.0.0.1:APP_PORT (default 3000) for your own HTTPS proxy.
 name: reachinbox-prod
 
 x-backend: &backend
@@ -78,10 +79,28 @@ services:
     image: reachinbox-web:latest
     restart: unless-stopped
     ports:
-      - '${APP_PORT:-3000}:3000'
+      # Local only: reach it through Caddy or another proxy on this host.
+      - '127.0.0.1:${APP_PORT:-3000}:3000'
     depends_on:
       api:
         condition: service_healthy
+
+  caddy:
+    image: caddy:2
+    profiles: [https]
+    restart: unless-stopped
+    environment:
+      DOMAIN: ${DOMAIN:?set DOMAIN (the public host name) to use the https profile}
+    ports:
+      - '80:80'
+      - '443:443'
+      - '443:443/udp'
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      - web
 
   mysql:
     image: mysql:8.4
@@ -146,3 +165,5 @@ volumes:
   mysql-data:
   redis-data:
   es-data:
+  caddy-data:
+  caddy-config:
