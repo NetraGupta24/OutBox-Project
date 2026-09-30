@@ -1,6 +1,7 @@
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import { redis } from '../../lib/redis.js';
 import {
+  releaseDeferral,
   reserveSendSlot,
   senderUsage,
   type Reservation,
@@ -176,5 +177,43 @@ describe('reserveSendSlot', () => {
       windowStart: Date.parse('2030-01-01T10:00:00Z'),
       windowEnd: NEXT_WINDOW,
     });
+  });
+});
+
+describe('releaseDeferral', () => {
+  // Fills a window (limit 2), defers a third email into the next window, and
+  // returns that window.
+  async function deferOne(senderId: number) {
+    const limited = { ...base, senderId, senderLimit: 2 };
+    await reserveSendSlot({ ...limited, now: T0 });
+    await reserveSendSlot({ ...limited, now: T0 });
+    const deferred = await reserveSendSlot({ ...limited, now: T0 });
+    expect(deferred).toMatchObject({ kind: 'deferred', scope: 'sender' });
+    return deferred.kind === 'deferred' ? deferred.targetWindow : -1;
+  }
+
+  it('stops later emails queueing behind a deferred email that was cancelled', async () => {
+    // Not released: a new email in that window queues behind the deferred one.
+    await deferOne(1);
+    const behind = await reserveSendSlot({
+      ...base,
+      senderId: 1,
+      senderLimit: 2,
+      campaignId: 9,
+      now: NEXT_WINDOW,
+    });
+    expect(behind).toMatchObject({ kind: 'deferred', scope: 'queue' });
+
+    // Released (the deferred email was cancelled): the new email goes straight out.
+    const target = await deferOne(2);
+    await releaseDeferral({ senderId: 2, campaignId: 1, window: target, windowMs: HOUR, now: T0 });
+    const fresh = await reserveSendSlot({
+      ...base,
+      senderId: 2,
+      senderLimit: 2,
+      campaignId: 9,
+      now: NEXT_WINDOW,
+    });
+    expect(fresh).toMatchObject({ kind: 'reserved', sendAt: NEXT_WINDOW });
   });
 });

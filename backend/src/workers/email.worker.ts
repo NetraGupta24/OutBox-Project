@@ -7,6 +7,7 @@ import {
   claimEmail,
   deferEmail,
   getDeliveryMarker,
+  isFinished,
   markFailed,
   markSent,
   releaseForRetry,
@@ -15,7 +16,7 @@ import {
 } from '../modules/emails/email.state.js';
 import { deliver, isPermanentFailure } from '../modules/emails/mailer.js';
 import { errorMessage } from '../lib/errors.js';
-import { reserveSendSlot } from '../modules/rateLimit/rateLimiter.js';
+import { releaseDeferral, reserveSendSlot } from '../modules/rateLimit/rateLimiter.js';
 import { reportLimitReached } from '../modules/rateLimit/limitEvents.js';
 import { senderHourlyLimit } from '../modules/senders/sender.service.js';
 
@@ -48,7 +49,17 @@ export async function processEmail(
 
   const email = await loadEmail(emailId);
   if (!email) return { outcome: 'skipped', reason: 'email no longer exists' };
-  if (email.status === 'sent' || email.status === 'failed') {
+  if (isFinished(email.status)) {
+    // A cancelled email may have been deferred into a later window: hand its
+    // place there back, so it doesn't hold up the emails behind it.
+    if (email.status === 'cancelled' && job.data.deferral?.attempt === job.attemptsMade) {
+      await releaseDeferral({
+        senderId: email.senderId,
+        campaignId: email.campaignId,
+        window: job.data.deferral.window,
+        windowMs: env.RATE_LIMIT_WINDOW_MS,
+      });
+    }
     return { outcome: 'skipped', reason: `already ${email.status}` };
   }
 

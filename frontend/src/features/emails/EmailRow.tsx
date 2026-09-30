@@ -29,7 +29,7 @@ function pill(email: EmailListItem) {
 }
 
 export function EmailRow({ email, tab }: { email: EmailListItem; tab: EmailTab }) {
-  const when = tab === 'sent' ? (email.sentAt ?? email.scheduledAt) : email.scheduledAt;
+  const when = tab === 'scheduled' ? email.scheduledAt : (email.sentAt ?? email.scheduledAt);
   return (
     <li>
       <Link

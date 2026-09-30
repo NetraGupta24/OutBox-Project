@@ -98,6 +98,7 @@ export async function indexEmails(ids: number[], { refresh = false } = {}): Prom
 export type SearchOptions = {
   userId: number;
   statuses: readonly EmailStatus[];
+  campaignId?: number;
   q: string;
   from: number;
   size: number;
@@ -116,7 +117,11 @@ export async function searchEmailIds(
     _source: false,
     query: {
       bool: {
-        filter: [{ term: { userId: opts.userId } }, { terms: { status: [...opts.statuses] } }],
+        filter: [
+          { term: { userId: opts.userId } },
+          { terms: { status: [...opts.statuses] } },
+          ...(opts.campaignId ? [{ term: { campaignId: opts.campaignId } }] : []),
+        ],
         must: [
           {
             multi_match: {

@@ -7,7 +7,8 @@ import { searchEmailIds } from '../search/emailIndex.js';
 // Dashboard tabs map to groups of row statuses.
 export const TAB_STATUSES = {
   scheduled: ['scheduled', 'delayed', 'sending'],
-  sent: ['sent', 'failed'],
+  sent: ['sent', 'failed', 'cancelled'],
+  all: ['scheduled', 'delayed', 'sending', 'sent', 'failed', 'cancelled'],
 } as const satisfies Record<string, EmailStatus[]>;
 
 export type EmailTab = keyof typeof TAB_STATUSES;
@@ -46,6 +47,8 @@ export type ListOptions = {
   status?: EmailStatus;
   // Matches recipient or subject (case-insensitive substring).
   q?: string;
+  // Only this campaign's emails.
+  campaignId?: number;
 };
 
 function preview(text: string): string {
@@ -98,6 +101,7 @@ async function searchWithElasticsearch(userId: number, opts: ListOptions & { q: 
   const { ids, total } = await searchEmailIds({
     userId,
     statuses,
+    campaignId: opts.campaignId,
     q: opts.q,
     from: (opts.page - 1) * opts.pageSize,
     size: opts.pageSize,
@@ -138,15 +142,18 @@ export async function listEmails(
   const where: Prisma.EmailWhereInput = {
     userId,
     status: { in: tabStatuses(opts) },
+    ...(opts.campaignId ? { campaignId: opts.campaignId } : {}),
     ...(opts.q
       ? { OR: [{ recipient: { contains: opts.q } }, { subject: { contains: opts.q } }] }
       : {}),
   };
-  // Scheduled: soonest first. Sent: most recent first.
+  // Scheduled: soonest first. Sent: most recent first. A campaign: send order.
   const orderBy: Prisma.EmailOrderByWithRelationInput[] =
     opts.tab === 'scheduled'
       ? [{ scheduledAt: 'asc' }, { id: 'asc' }]
-      : [{ updatedAt: 'desc' }, { id: 'desc' }];
+      : opts.tab === 'sent'
+        ? [{ updatedAt: 'desc' }, { id: 'desc' }]
+        : [{ scheduledAt: 'asc' }, { id: 'asc' }];
 
   const [rows, total] = await Promise.all([
     prisma.email.findMany({
@@ -164,7 +171,11 @@ export async function listEmails(
   };
 }
 
-export type EmailCounts = Record<EmailTab, number> & { failed: number; delayed: number };
+export type EmailCounts = Record<'scheduled' | 'sent', number> & {
+  failed: number;
+  delayed: number;
+  cancelled: number;
+};
 
 export async function countEmails(userId: number): Promise<EmailCounts> {
   const groups = await prisma.email.groupBy({
@@ -179,6 +190,7 @@ export async function countEmails(userId: number): Promise<EmailCounts> {
     sent: count(TAB_STATUSES.sent),
     failed: count(['failed']),
     delayed: count(['delayed']),
+    cancelled: count(['cancelled']),
   };
 }
 

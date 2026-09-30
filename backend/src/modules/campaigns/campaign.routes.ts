@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { z } from 'zod';
 import { parseOrThrow } from '../../lib/validate.js';
 import { currentUser } from '../auth/requireAuth.js';
 import {
@@ -7,6 +8,14 @@ import {
   previewInputSchema,
 } from './campaign.schema.js';
 import { createCampaign, previewCampaign } from './campaign.service.js';
+import { getCampaign, listCampaigns } from './campaign.query.js';
+import { cancelEmails, retryEmails } from '../emails/email.actions.js';
+
+const listQuerySchema = z.object({
+  page: z.coerce.number().int().min(1).default(1),
+  pageSize: z.coerce.number().int().min(1).max(100).default(20),
+});
+const idParamSchema = z.object({ id: z.coerce.number().int().positive() });
 
 export const campaignRouter = Router();
 
@@ -25,4 +34,27 @@ campaignRouter.post('/', async (req, res) => {
 campaignRouter.post('/preview', async (req, res) => {
   const input = parseOrThrow(previewInputSchema, req.body);
   res.json(await previewCampaign(currentUser(req).id, input));
+});
+
+// Campaigns with live progress, newest first.
+campaignRouter.get('/', async (req, res) => {
+  const query = parseOrThrow(listQuerySchema, req.query);
+  res.json(await listCampaigns(currentUser(req).id, query));
+});
+
+campaignRouter.get('/:id', async (req, res) => {
+  const { id } = parseOrThrow(idParamSchema, req.params);
+  res.json(await getCampaign(currentUser(req).id, id));
+});
+
+// Cancels every email of the campaign that hasn't started sending.
+campaignRouter.post('/:id/cancel', async (req, res) => {
+  const { id } = parseOrThrow(idParamSchema, req.params);
+  res.json(await cancelEmails({ userId: currentUser(req).id, campaignId: id }));
+});
+
+// Sends the campaign's failed emails again.
+campaignRouter.post('/:id/retry', async (req, res) => {
+  const { id } = parseOrThrow(idParamSchema, req.params);
+  res.json(await retryEmails({ userId: currentUser(req).id, campaignId: id }));
 });

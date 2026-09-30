@@ -1,6 +1,6 @@
 'use client';
 
-import { Clock, Send } from 'lucide-react';
+import { Clock, LayoutList, Send } from 'lucide-react';
 import { useApi } from '@/hooks/useApi';
 import type { EmailCounts } from '@/types/api';
 import { NavItem } from './NavItem';
@@ -26,6 +26,7 @@ export function SidebarNav() {
         count={data?.sent}
         alert={data?.failed ? `${data.failed} failed` : undefined}
       />
+      <NavItem href="/campaigns" icon={<LayoutList className="size-4" />} label="Campaigns" />
     </nav>
   );
 }

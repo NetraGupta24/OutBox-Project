@@ -1,4 +1,4 @@
-import { AlertCircle, CheckCircle2, Clock, Hourglass, Loader2 } from 'lucide-react';
+import { AlertCircle, Ban, CheckCircle2, Clock, Hourglass, Loader2 } from 'lucide-react';
 import type { EmailStatus } from '@/types/api';
 
 const STYLES: Record<EmailStatus, { className: string; label: string; icon: typeof Clock }> = {
@@ -7,6 +7,7 @@ const STYLES: Record<EmailStatus, { className: string; label: string; icon: type
   sending: { className: 'bg-sky-50 text-sky-700', label: 'Sending', icon: Loader2 },
   sent: { className: 'bg-muted text-ink/70', label: 'Sent', icon: CheckCircle2 },
   failed: { className: 'bg-red-50 text-red-700', label: 'Failed', icon: AlertCircle },
+  cancelled: { className: 'bg-muted text-ink-muted', label: 'Cancelled', icon: Ban },
 };
 
 type Props = { status: EmailStatus; text?: string; title?: string };

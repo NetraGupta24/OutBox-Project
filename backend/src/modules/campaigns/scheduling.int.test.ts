@@ -151,6 +151,12 @@ describe('listEmails', () => {
     });
     expect(wrongTab.items.map((e) => e.status)).toEqual(['scheduled']);
 
-    expect(await countEmails(userId)).toEqual({ scheduled: 1, sent: 2, failed: 1, delayed: 0 });
+    expect(await countEmails(userId)).toEqual({
+      cancelled: 0,
+      scheduled: 1,
+      sent: 2,
+      failed: 1,
+      delayed: 0,
+    });
   });
 });

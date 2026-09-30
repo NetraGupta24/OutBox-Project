@@ -5,18 +5,23 @@ import { useRouter } from 'next/navigation';
 import {
   AlertCircle,
   ArrowLeft,
+  Ban,
   CheckCircle2,
   Clock,
   ExternalLink,
   Hourglass,
+  LayoutList,
   Loader2,
+  RotateCcw,
 } from 'lucide-react';
 import { useState, type ReactNode } from 'react';
 import { Button, IconButton } from '@/components/ui/Button';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { Skeleton } from '@/components/ui/Skeleton';
 import { StatusPill } from '@/components/ui/StatusPill';
+import { useToast } from '@/components/ui/Toast';
 import { useApi } from '@/hooks/useApi';
+import { api, type ApiError } from '@/lib/api';
 import { formatFull, formatRelative, plural } from '@/lib/format';
 import type { EmailDetail } from '@/types/api';
 import { EmailBody } from './EmailBody';
@@ -43,8 +48,64 @@ function Step({
   );
 }
 
-function DeliveryCard({ email }: { email: EmailDetail }) {
-  const done = email.status === 'sent' || email.status === 'failed';
+const FINISHED = ['sent', 'failed', 'cancelled'];
+
+// Cancel an email that hasn't gone out yet, or send a failed one again.
+function EmailActions({ email, onDone }: { email: EmailDetail; onDone: () => void }) {
+  const toast = useToast();
+  const [busy, setBusy] = useState(false);
+  const action =
+    email.status === 'scheduled' || email.status === 'delayed'
+      ? 'cancel'
+      : email.status === 'failed'
+        ? 'retry'
+        : null;
+  if (!action) return null;
+
+  async function run() {
+    setBusy(true);
+    try {
+      await api(`/api/emails/${email.id}/${action}`, { method: 'POST' });
+      toast(
+        action === 'cancel'
+          ? { tone: 'info', title: 'Email cancelled' }
+          : { tone: 'success', title: 'Sending again', description: 'It goes out shortly.' },
+      );
+      onDone();
+    } catch (err) {
+      toast({ tone: 'error', title: (err as ApiError).message });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return action === 'cancel' ? (
+    <Button
+      variant="ghost"
+      size="sm"
+      className="mt-4 w-full text-red-700 hover:bg-red-50"
+      icon={<Ban className="size-3.5" />}
+      loading={busy}
+      onClick={() => void run()}
+    >
+      Cancel this email
+    </Button>
+  ) : (
+    <Button
+      variant="outline"
+      size="sm"
+      className="mt-4 w-full"
+      icon={<RotateCcw className="size-3.5" />}
+      loading={busy}
+      onClick={() => void run()}
+    >
+      Retry sending
+    </Button>
+  );
+}
+
+function DeliveryCard({ email, onChange }: { email: EmailDetail; onChange: () => void }) {
+  const done = FINISHED.includes(email.status);
   return (
     <section aria-label="Delivery" className="rounded-xl border border-border p-4">
       <h2 className="mb-3 text-xs font-medium tracking-wider text-ink-muted uppercase">Delivery</h2>
@@ -90,6 +151,13 @@ function DeliveryCard({ email }: { email: EmailDetail }) {
             detail={email.error}
           />
         )}
+        {email.status === 'cancelled' && (
+          <Step
+            icon={<Ban className="size-4" />}
+            title="Cancelled"
+            detail="Stopped before it was sent."
+          />
+        )}
         {!done && email.error && email.status !== 'delayed' && (
           <Step
             icon={<AlertCircle className="size-4" />}
@@ -115,6 +183,13 @@ function DeliveryCard({ email }: { email: EmailDetail }) {
           {email.messageId}
         </p>
       )}
+      <EmailActions email={email} onDone={onChange} />
+      <Link
+        href={`/campaigns/${email.campaignId}`}
+        className="mt-4 flex items-center gap-1.5 border-t border-border pt-3 text-[13px] text-ink-muted hover:text-ink"
+      >
+        <LayoutList className="size-3.5" /> View campaign progress
+      </Link>
     </section>
   );
 }
@@ -129,10 +204,9 @@ export function EmailDetailView({ id }: { id: number }) {
     loading,
     reload,
   } = useApi<EmailDetail>(`/api/emails/${id}`, { refreshMs: final ? undefined : 5000 });
-  const isFinal = error?.status === 404 || email?.status === 'sent' || email?.status === 'failed';
+  const isFinal = error?.status === 404 || (email !== undefined && FINISHED.includes(email.status));
   if (isFinal !== final) setFinal(isFinal);
-  const backHref =
-    email && (email.status === 'sent' || email.status === 'failed') ? '/sent' : '/scheduled';
+  const backHref = email && FINISHED.includes(email.status) ? '/sent' : '/scheduled';
 
   return (
     <>
@@ -211,7 +285,7 @@ export function EmailDetailView({ id }: { id: number }) {
               </div>
             </article>
             <aside>
-              <DeliveryCard email={email} />
+              <DeliveryCard email={email} onChange={() => void reload()} />
             </aside>
           </div>
         ) : null}

@@ -224,6 +224,36 @@ export async function reserveSendSlot(
   };
 }
 
+const RELEASE_SCRIPT = `
+local ttl = tonumber(ARGV[1])
+for _, key in ipairs(KEYS) do
+  redis.call('INCR', key)
+  redis.call('PEXPIRE', key, ttl)
+end
+return 1
+`;
+
+/**
+ * An email deferred into a window was cancelled before it came back: count it
+ * as back, as the reserve script does when a deferred email returns, so the
+ * window's queue doesn't keep waiting for it.
+ */
+export async function releaseDeferral(
+  input: { senderId: number; campaignId: number; window: number; windowMs: number; now?: number },
+  client: Redis = defaultRedis,
+): Promise<void> {
+  const prefix = senderPrefix(input.senderId);
+  const now = input.now ?? Date.now();
+  const ttl = Math.max(1, (input.window + 2) * input.windowMs - now);
+  await client.eval(
+    RELEASE_SCRIPT,
+    2,
+    `${prefix}:back:${input.window}`,
+    `${prefix}:c:${input.campaignId}:back:${input.window}`,
+    ttl,
+  );
+}
+
 // How many emails a sender has used in the window containing `now`.
 export async function senderUsage(
   senderId: number,

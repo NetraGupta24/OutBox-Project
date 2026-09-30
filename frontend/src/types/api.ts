@@ -7,8 +7,9 @@ export type User = {
   avatarUrl: string | null;
 };
 
-export type EmailStatus = 'scheduled' | 'delayed' | 'sending' | 'sent' | 'failed';
-export type EmailTab = 'scheduled' | 'sent';
+export type EmailStatus = 'scheduled' | 'delayed' | 'sending' | 'sent' | 'failed' | 'cancelled';
+// `all`: every status, used for one campaign's emails.
+export type EmailTab = 'scheduled' | 'sent' | 'all';
 
 export type EmailListItem = {
   id: number;
@@ -38,6 +39,7 @@ export type EmailCounts = {
   sent: number;
   failed: number;
   delayed: number;
+  cancelled: number;
 };
 
 export type EmailDetail = {
@@ -96,6 +98,24 @@ export type CreateCampaignResult = {
   duplicatesRemoved: number;
   replayed: boolean;
 };
+
+export type CampaignListItem = {
+  id: number;
+  subject: string;
+  senderEmail: string;
+  total: number;
+  counts: Record<EmailStatus, number>;
+  createdAt: string;
+  startAt: string;
+  delayMs: number;
+  hourlyLimit: number;
+  nextSendAt: string | null;
+  finishAt: string | null;
+  firstSentAt: string | null;
+  lastSentAt: string | null;
+};
+
+export type CampaignDetail = CampaignListItem & { bodyHtml: string };
 
 export type ApiErrorBody = {
   error: string;

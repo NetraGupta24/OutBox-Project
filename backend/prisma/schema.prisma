@@ -83,6 +83,7 @@ enum EmailStatus {
   sending
   sent
   failed
+  cancelled // stopped by the user before it was sent
 }
 
 // One recipient of a campaign. This row is the source of truth; the BullMQ

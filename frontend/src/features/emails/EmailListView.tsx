@@ -34,10 +34,27 @@ const FILTERS: Record<EmailTab, { value: EmailStatus | 'all'; label: string }[]>
     { value: 'all', label: 'All' },
     { value: 'sent', label: 'Sent' },
     { value: 'failed', label: 'Failed' },
+    { value: 'cancelled', label: 'Cancelled' },
+  ],
+  all: [
+    { value: 'all', label: 'All' },
+    { value: 'scheduled', label: 'Scheduled' },
+    { value: 'delayed', label: 'Delayed' },
+    { value: 'sent', label: 'Sent' },
+    { value: 'failed', label: 'Failed' },
+    { value: 'cancelled', label: 'Cancelled' },
   ],
 };
 
-export function EmailListView({ tab }: { tab: EmailTab }) {
+type Props = {
+  tab: EmailTab;
+  // Only this campaign's emails (the campaign page).
+  campaignId?: number;
+  // Changing it reloads the list at once, e.g. after cancelling emails.
+  reloadKey?: number;
+};
+
+export function EmailListView({ tab, campaignId, reloadKey = 0 }: Props) {
   const router = useRouter();
   const pathname = usePathname();
   const params = useSearchParams();
@@ -80,11 +97,16 @@ export function EmailListView({ tab }: { tab: EmailTab }) {
     pageSize: String(PAGE_SIZE),
   });
   if (q) apiParams.set('q', q);
+  if (campaignId) apiParams.set('campaignId', String(campaignId));
   if (filter !== 'all') apiParams.set('filter', filter);
   const { data, error, loading, refreshing, reload } = useApi<Paginated<EmailListItem>>(
     `/api/emails?${apiParams}`,
     { refreshMs: REFRESH_MS },
   );
+
+  useEffect(() => {
+    if (reloadKey) void reload();
+  }, [reloadKey, reload]);
 
   const filtered = q !== '' || filter !== 'all';
   const first = data && data.total > 0 ? (data.page - 1) * data.pageSize + 1 : 0;
@@ -192,6 +214,8 @@ export function EmailListView({ tab }: { tab: EmailTab }) {
                 </Button>
               }
             />
+          ) : tab === 'all' ? (
+            <EmptyState icon={<Send className="size-5" />} title="No emails in this campaign" />
           ) : tab === 'scheduled' ? (
             <EmptyState
               icon={<Clock className="size-5" />}
@@ -210,12 +234,14 @@ export function EmailListView({ tab }: { tab: EmailTab }) {
             <EmptyState
               icon={<Send className="size-5" />}
               title="No sent emails yet"
-              description="Sent and failed emails appear here once they go out."
+              description="Sent, failed and cancelled emails appear here."
             />
           )
         ) : data ? (
           <ul
-            aria-label={tab === 'scheduled' ? 'Scheduled emails' : 'Sent emails'}
+            aria-label={
+              tab === 'scheduled' ? 'Scheduled emails' : tab === 'sent' ? 'Sent emails' : 'Emails'
+            }
             aria-busy={loading}
             className={`transition-opacity ${loading ? 'opacity-50' : ''}`}
           >

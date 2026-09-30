@@ -7,6 +7,9 @@
  *                                     ├──▶ scheduled (temporary error, BullMQ retries)
  *                                     └──▶ failed    (permanent error or last attempt)
  *
+ *   scheduled | delayed ──user cancels──▶ cancelled
+ *   failed ──user retries──▶ scheduled
+ *
  * The claim is a single conditional UPDATE, so only one worker can move a row
  * into `sending`, however many copies of its job run.
  */
@@ -16,6 +19,12 @@ import { redis } from '../../lib/redis.js';
 // A row still `sending` after this long is assumed to belong to a worker that
 // crashed mid-send, and may be claimed again. SMTP timeouts keep a live send
 // well below it.
+export const FINISHED_STATUSES = ['sent', 'failed', 'cancelled'] as const;
+
+export function isFinished(status: string): boolean {
+  return (FINISHED_STATUSES as readonly string[]).includes(status);
+}
+
 export const SEND_LOCK_STALE_MS = 2 * 60_000;
 
 const DELIVERY_MARKER_TTL_SECONDS = 7 * 24 * 3600;
@@ -48,7 +57,7 @@ export async function claimEmail(emailId: number, now = new Date()): Promise<Cla
     select: { status: true, lockedAt: true },
   });
   if (!row) return { kind: 'done', reason: 'email no longer exists' };
-  if (row.status === 'sent' || row.status === 'failed') {
+  if (isFinished(row.status)) {
     return { kind: 'done', reason: `already ${row.status}` };
   }
   // Another attempt holds a fresh claim: check again once it would be stale.
