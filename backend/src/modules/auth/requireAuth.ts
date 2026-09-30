@@ -17,11 +17,14 @@ export async function requireAuth(req: Request, _res: Response, next: NextFuncti
   const token: unknown = req.cookies?.[SESSION_COOKIE];
   if (typeof token !== 'string' || !token) throw unauthorized();
 
-  const userId = await readSessionToken(token);
-  if (!userId) throw unauthorized('Session expired, please sign in again');
+  const session = await readSessionToken(token);
+  if (!session) throw unauthorized('Session expired, please sign in again');
 
-  const user = await prisma.user.findUnique({ where: { id: userId } });
+  const user = await prisma.user.findUnique({ where: { id: session.userId } });
   if (!user) throw unauthorized();
+  if (user.sessionVersion !== session.version) {
+    throw unauthorized('Session expired, please sign in again');
+  }
 
   req.user = toAuthUser(user);
   next();

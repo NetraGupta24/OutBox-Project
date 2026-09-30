@@ -12,14 +12,19 @@ datasource db {
 
 // All DateTime columns are stored in UTC with millisecond precision.
 
+// A user signs in with Google, with email and password, or both (same email).
 model User {
-  id        Int      @id @default(autoincrement())
-  googleId  String   @unique @map("google_id") @db.VarChar(64)
-  email     String   @unique @db.VarChar(320)
-  name      String   @db.VarChar(255)
-  avatarUrl String?  @map("avatar_url") @db.VarChar(1024)
-  createdAt DateTime @default(now()) @map("created_at") @db.DateTime(3)
-  updatedAt DateTime @updatedAt @map("updated_at") @db.DateTime(3)
+  id             Int      @id @default(autoincrement())
+  googleId       String?  @unique @map("google_id") @db.VarChar(64)
+  email          String   @unique @db.VarChar(320)
+  name           String   @db.VarChar(255)
+  avatarUrl      String?  @map("avatar_url") @db.VarChar(1024)
+  // scrypt hash (see modules/auth/password.ts); null for Google-only accounts.
+  passwordHash   String?  @map("password_hash") @db.VarChar(255)
+  // Part of every session token; increasing it signs out all existing sessions.
+  sessionVersion Int      @default(0) @map("session_version")
+  createdAt      DateTime @default(now()) @map("created_at") @db.DateTime(3)
+  updatedAt      DateTime @updatedAt @map("updated_at") @db.DateTime(3)
 
   senders          Sender[]
   campaigns        Campaign[]

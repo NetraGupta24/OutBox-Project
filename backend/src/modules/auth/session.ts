@@ -55,14 +55,20 @@ async function verify(token: string, audience: string) {
   }
 }
 
-export async function createSessionToken(userId: number): Promise<string> {
-  return sign({ sub: String(userId) }, 'session', SESSION_TTL_SECONDS);
+// `version` is the user's sessionVersion: raising it ends every older session.
+export async function createSessionToken(userId: number, version = 0): Promise<string> {
+  return sign({ sub: String(userId), v: version }, 'session', SESSION_TTL_SECONDS);
 }
 
-export async function readSessionToken(token: string): Promise<number | null> {
+export async function readSessionToken(
+  token: string,
+): Promise<{ userId: number; version: number } | null> {
   const payload = await verify(token, 'session');
   const userId = Number(payload?.sub);
-  return Number.isInteger(userId) && userId > 0 ? userId : null;
+  if (!Number.isInteger(userId) || userId < 1) return null;
+  // Tokens issued before versions existed count as version 0.
+  const version = typeof payload?.v === 'number' ? payload.v : 0;
+  return { userId, version };
 }
 
 // State for one sign-in attempt: CSRF state, PKCE verifier and where to return.

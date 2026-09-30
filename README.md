@@ -94,7 +94,13 @@ The redirect URI points at the frontend because the frontend proxies `/api/*` to
 - Page scripts can't read the cookie, and browsers don't send it on cross-site POSTs; together with JSON-only request bodies, that protects the API from CSRF.
 - Logging out clears the cookie. Pages under the app check the session with the backend and send signed-out visitors to `/login`.
 
-The login page shows the email and password fields from the design, disabled: only Google sign-in is supported.
+**Email and password (optional, alongside Google).** "Create one" on the login page opens sign-up with name, email and password.
+
+- **Passwords** are hashed with scrypt, Node's built-in, with a random salt per user. At least 8 characters.
+- **Wrong credentials:** an unknown email and a wrong password get the same answer ("Wrong email or password") and take about as long. So the form can't be used to find out who has an account.
+- **Guessing limits,** counted in Redis so they hold across API instances. After 10 failed attempts for one email, or 50 from one IP, sign-in is refused for 15 minutes. Sign-ups are also limited per IP.
+- **Same email on both:** if someone signs in with Google using the email of a password account, the accounts are linked. Google has verified the address, but whoever set the password hadn't, so the password is removed and that account's existing sessions are ended. The owner keeps signing in with Google. Each session token carries the user's `sessionVersion`, which is what ends the old sessions.
+- **Google-only emails:** signing up with an email that already signs in with Google points the user to "Login with Google".
 
 ## Slack alerts
 
@@ -175,6 +181,8 @@ To call the API from curl or Postman: sign in at http://localhost:3000, copy the
 | ------ | ------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
 | GET    | `/api/auth/google`                                      | Start Google sign-in (optional `?returnTo=/sent`)                                                               |
 | GET    | `/api/auth/google/callback`                             | Where Google sends the browser back                                                                             |
+| POST   | `/api/auth/register`                                    | Email sign-up: `{ name, email, password }`. Signs the new user in                                               |
+| POST   | `/api/auth/login`                                       | Email sign-in: `{ email, password }`                                                                            |
 | GET    | `/api/auth/me`                                          | The signed-in user (name, email, avatar)                                                                        |
 | POST   | `/api/auth/logout`                                      | Sign out (clears the session cookie)                                                                            |
 | GET    | `/api/integrations/slack`                               | Slack connection status                                                                                         |
