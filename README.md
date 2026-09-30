@@ -354,7 +354,8 @@ The whole stack runs from `docker-compose.prod.yml` on any Linux host with Docke
 - A one-shot `migrate` step that applies database migrations. The API and workers only start once it succeeded.
 - The API, with a health check.
 - The worker, which can be scaled out.
-- The Next.js web app, the only published service. It also proxies `/api` and the queue dashboard.
+- The Next.js web app. It also proxies `/api` and the queue dashboard, and listens on `127.0.0.1` only.
+- Optional (`--profile https`): Caddy on ports 80/443, with an automatic Let's Encrypt certificate for `DOMAIN`.
 
 **1. Configure**
 
@@ -365,7 +366,7 @@ cp .env.production.example .env.production
 
 Fill in `.env.production`:
 
-- `FRONTEND_URL`: the public https address of the app.
+- `FRONTEND_URL`: the public https address of the app, and `DOMAIN`: the same without `https://`.
 - Database passwords.
 - `ENCRYPTION_KEY` and `JWT_SECRET`: `openssl rand -hex 32` each.
 - Google OAuth keys.
@@ -379,21 +380,17 @@ Then register the production redirect URIs:
 **2. Start**
 
 ```bash
-docker compose -f docker-compose.prod.yml --env-file .env.production up -d --build
+docker compose -f docker-compose.prod.yml --env-file .env.production --profile https up -d --build
 docker compose -f docker-compose.prod.yml --env-file .env.production run --rm migrate npm run seed:senders -- --verify
 ```
 
-**3. HTTPS.** Put a TLS-terminating reverse proxy in front of port `APP_PORT` (3000 by default). Session cookies are marked `Secure` when `FRONTEND_URL` is https. For example, with Caddy:
+**3. HTTPS.** With `--profile https`, Caddy serves `DOMAIN` over HTTPS and redirects http to https. `DOMAIN` must point at the server, and ports 80 and 443 must be open. Session cookies are marked `Secure` because `FRONTEND_URL` is https.
 
-```
-scheduler.example.com {
-  reverse_proxy localhost:3000
-}
-```
+To use your own proxy or a cloud load balancer instead, leave out `--profile https` and forward to `127.0.0.1:APP_PORT` (3000 by default).
 
 **Operating it**
 
-| Task                  | Command (add `-f docker-compose.prod.yml --env-file .env.production`)                                                             |
+| Task                  | Command (add `-f docker-compose.prod.yml --env-file .env.production --profile https`)                                             |
 | --------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
 | More sending capacity | `docker compose up -d --scale worker=3`. Limits and idempotency are enforced in Redis and MySQL, so this is safe                  |
 | Deploy a new version  | `git pull && docker compose up -d --build`. Migrations run first; workers finish their current emails before stopping             |
@@ -406,7 +403,7 @@ Deployment notes:
 
 - **Restarts:** scheduled emails survive restarts and redeploys. MySQL holds every email, Redis keeps the delayed jobs (AOF), and the worker re-creates any missing job when it starts.
 - **Production checks:** in production the backend warns at startup about unsafe settings, such as an `http` `FRONTEND_URL` or missing Google keys.
-- **Security headers:** pages are sent with `X-Frame-Options`, `X-Content-Type-Options`, `Referrer-Policy` and `Permissions-Policy`. HSTS is left to the HTTPS proxy.
+- **Security headers:** pages are sent with `X-Frame-Options`, `X-Content-Type-Options`, `Referrer-Policy` and `Permissions-Policy`. HSTS is added by the HTTPS proxy (Caddy).
 - **Images:**
   - The API and worker share one slim image: production dependencies only, run as a non-root user.
   - Migrations use a separate tools image.
