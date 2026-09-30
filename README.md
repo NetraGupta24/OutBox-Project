@@ -14,14 +14,16 @@ A full-stack email scheduler: an Express + BullMQ backend that schedules and sen
 | Search   | Elasticsearch 8                                       |
 | Email    | Ethereal Email (SMTP)                                 |
 | Frontend | Next.js (App Router), React, Tailwind CSS, TypeScript |
-| Infra    | Docker Compose for MySQL, Redis and Elasticsearch     |
+| Infra    | Docker, Docker Compose, GitHub Actions CI             |
 
 ## Repository layout
 
 ```
-backend/    Express API (src/server.ts) and worker process (src/worker.ts)
-frontend/   Next.js dashboard
-docker-compose.yml
+backend/                 Express API (src/server.ts) and worker process (src/worker.ts)
+frontend/                Next.js dashboard
+docker-compose.yml       Local infrastructure (MySQL, Redis, Elasticsearch)
+docker-compose.prod.yml  Full production stack (see "Deployment")
+.github/workflows/ci.yml Lint, typecheck, unit + integration tests, load test, image builds
 ```
 
 ## Getting started
@@ -184,6 +186,12 @@ To call the API from curl or Postman: sign in at http://localhost:3000, copy the
 | GET    | `/api/emails?status=scheduled\|sent&page=1&pageSize=25` | Scheduled or Sent list, paginated. Optional `q` (recipient or subject) and `filter` (one status, e.g. `failed`) |
 | GET    | `/api/emails/counts`                                    | Numbers for the sidebar                                                                                         |
 | GET    | `/api/emails/:id`                                       | One email with its body and sender                                                                              |
+| POST   | `/api/emails/:id/cancel`                                | Cancel an email that hasn't started sending                                                                     |
+| POST   | `/api/emails/:id/retry`                                 | Send a failed email again                                                                                       |
+| GET    | `/api/campaigns?page=1&pageSize=20`                     | Campaigns, newest first, with live counts per status and the projected finish                                   |
+| GET    | `/api/campaigns/:id`                                    | One campaign with its progress. Its emails: `/api/emails?status=all&campaignId=:id`                             |
+| POST   | `/api/campaigns/:id/cancel`                             | Cancel all of the campaign's emails that haven't started sending                                                |
+| POST   | `/api/campaigns/:id/retry`                              | Send the campaign's failed emails again                                                                         |
 | GET    | `/api/senders`                                          | Senders for the Compose "From" dropdown                                                                         |
 | GET    | `/health`                                               | MySQL, Redis and Elasticsearch status                                                                           |
 
@@ -239,6 +247,18 @@ The frontend follows the Figma (login, Scheduled and Sent lists, email view, Com
   - `Ctrl`/`Cmd` + `Enter` schedules.
   - Leaving with unsaved changes asks first.
   - A double-clicked or retried Schedule can't create two campaigns (`Idempotency-Key`).
+
+**Campaigns** (beyond the Figma)
+
+- Every Compose submission is a campaign. The Campaigns page lists them with a live progress bar (sent, failed, cancelled, sending, delayed, still to go), the sender and when the last email is due.
+- A campaign's page shows its settings, the projected finish, and all its emails with the same search and filters as the mailbox lists.
+- **Cancel remaining** stops every email that hasn't started sending (after a confirmation), and **Retry failed** sends failed emails again. Single emails have the same actions on their own page.
+
+How cancelling stays safe:
+
+- MySQL decides, with a conditional update: only `scheduled` or `delayed` emails can become `cancelled`, so an email already being sent is never half-cancelled.
+- The BullMQ job is removed when possible. A job that is running at that moment finds the row cancelled and does nothing.
+- If a cancelled email had been moved into a later rate-limit window, its place there is handed back. Otherwise the emails queued behind it would wait for an email that never comes.
 
 **Everywhere**
 
@@ -326,6 +346,85 @@ To see it: schedule a few emails a minute apart, stop the API and worker, wait u
 
 `SMTP_DRY_RUN=true` builds every email but never connects to SMTP: useful for load tests or working offline.
 
+## Deployment
+
+The whole stack runs from `docker-compose.prod.yml` on any Linux host with Docker, for example a small cloud VM with 4 GB of memory:
+
+- MySQL, Redis (AOF persistence) and Elasticsearch, on an internal network only.
+- A one-shot `migrate` step that applies database migrations. The API and workers only start once it succeeded.
+- The API, with a health check.
+- The worker, which can be scaled out.
+- The Next.js web app, the only published service. It also proxies `/api` and the queue dashboard.
+
+**1. Configure**
+
+```bash
+git clone <repo> && cd <repo>
+cp .env.production.example .env.production
+```
+
+Fill in `.env.production`:
+
+- `FRONTEND_URL`: the public https address of the app.
+- Database passwords.
+- `ENCRYPTION_KEY` and `JWT_SECRET`: `openssl rand -hex 32` each.
+- Google OAuth keys.
+- Optional: Slack keys and `BULL_BOARD_PASSWORD`.
+
+Then register the production redirect URIs:
+
+- **Google:** `<FRONTEND_URL>/api/auth/google/callback`
+- **Slack:** `<FRONTEND_URL>/api/integrations/slack/callback`
+
+**2. Start**
+
+```bash
+docker compose -f docker-compose.prod.yml --env-file .env.production up -d --build
+docker compose -f docker-compose.prod.yml --env-file .env.production run --rm migrate npm run seed:senders -- --verify
+```
+
+**3. HTTPS.** Put a TLS-terminating reverse proxy in front of port `APP_PORT` (3000 by default). Session cookies are marked `Secure` when `FRONTEND_URL` is https. For example, with Caddy:
+
+```
+scheduler.example.com {
+  reverse_proxy localhost:3000
+}
+```
+
+**Operating it**
+
+| Task                  | Command (add `-f docker-compose.prod.yml --env-file .env.production`)                                                             |
+| --------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| More sending capacity | `docker compose up -d --scale worker=3`. Limits and idempotency are enforced in Redis and MySQL, so this is safe                  |
+| Deploy a new version  | `git pull && docker compose up -d --build`. Migrations run first; workers finish their current emails before stopping             |
+| Logs                  | `docker compose logs -f api worker`                                                                                               |
+| Health                | `curl <FRONTEND_URL>/health`                                                                                                      |
+| Rebuild search index  | `docker compose run --rm migrate npm run search:reindex`                                                                          |
+| Back up MySQL         | `docker compose exec mysql sh -c 'mysqldump -uroot -p"$MYSQL_ROOT_PASSWORD" --single-transaction "$MYSQL_DATABASE"' > backup.sql` |
+
+Deployment notes:
+
+- **Restarts:** scheduled emails survive restarts and redeploys. MySQL holds every email, Redis keeps the delayed jobs (AOF), and the worker re-creates any missing job when it starts.
+- **Production checks:** in production the backend warns at startup about unsafe settings, such as an `http` `FRONTEND_URL` or missing Google keys.
+- **Security headers:** pages are sent with `X-Frame-Options`, `X-Content-Type-Options`, `Referrer-Policy` and `Permissions-Policy`. HSTS is left to the HTTPS proxy.
+- **Images:**
+  - The API and worker share one slim image: production dependencies only, run as a non-root user.
+  - Migrations use a separate tools image.
+  - The web app is a Next.js standalone server.
+
+## Continuous integration
+
+`.github/workflows/ci.yml` runs on every push and pull request:
+
+- **Checks:**
+  - formatting, lint and typecheck,
+  - unit tests,
+  - production builds of the backend and frontend.
+- **Integration tests:**
+  - against real MySQL, Redis and Elasticsearch service containers,
+  - then the 1,000-email rate-limiter load test.
+- **Docker:** builds all three images.
+
 ## Useful scripts
 
 | Command                               | What it does                                                             |
@@ -340,7 +439,7 @@ To see it: schedule a few emails a minute apart, stop the API and worker, wait u
 | `npm run db:studio -w backend`        | Opens Prisma Studio to browse the database                               |
 | `npm run seed:senders -w backend`     | Creates or updates the Ethereal senders                                  |
 
-Integration tests use their own database (`reachinbox_test`, created and migrated automatically) and Redis database 15, so they never touch development data. They cover Slack (connect, state checks, test message, alerts, not connected, removed webhook, retries), search (as-you-type matching, per-user results, filters, MySQL fallback), Google sign-in (state and PKCE, callback errors, safe return paths, sessions, logout; only the call to Google's token endpoint is faked), the rate limiter (limits, spacing, order, 200 parallel reservations), duplicate-request handling, the send claim race, and job reconciliation.
+Integration tests use their own database (`reachinbox_test`, created and migrated automatically) and Redis database 15, so they never touch development data. They cover cancelling and retrying (including the rate-limit place handed back), campaign progress, Slack (connect, state checks, test message, alerts, not connected, removed webhook, retries), search (as-you-type matching, per-user results, filters, MySQL fallback), Google sign-in (state and PKCE, callback errors, safe return paths, sessions, logout; only the call to Google's token endpoint is faked), the rate limiter (limits, spacing, order, 200 parallel reservations), duplicate-request handling, the send claim race, and job reconciliation.
 
 ## Progress
 
@@ -354,4 +453,6 @@ Integration tests use their own database (`reachinbox_test`, created and migrate
 | 6   | Google authentication              | Done        |
 | 7   | Frontend dashboard                 | Done        |
 | 8   | Slack and Elasticsearch            | Done        |
-| 9   | Documentation, demo and submission | Not started |
+| 9   | Documentation, demo and submission | In progress |
+| +   | Campaigns, cancel and retry        | Done        |
+| +   | Production deployment and CI       | Done        |
