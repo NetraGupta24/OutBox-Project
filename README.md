@@ -2,7 +2,67 @@
 
 A full-stack email scheduler: an Express + BullMQ backend that schedules and sends emails through Ethereal SMTP, and a Next.js dashboard to compose, schedule and track them.
 
-> Work in progress: see the Progress table at the end.
+**Live demo:** https://outbox-scheduler.indiasouthcentral.cloudapp.azure.com. Create an account with email and password, or sign in with Google. Emails go to [Ethereal](https://ethereal.email), a test inbox, so nothing reaches real people. Each sent email links to its Ethereal preview.
+
+**Highlights**
+
+- **Scheduling:** BullMQ delayed jobs, no cron. MySQL is the source of truth, and jobs are rebuilt from it after any Redis or worker failure.
+- **Rate limits:** a per-sender hourly limit, a per-campaign hourly limit and a minimum 2 s gap between sends, enforced atomically in Redis. They hold across any number of workers. Emails over a limit move to the next window, in order, and are never dropped.
+- **Idempotency:** five layers stop an email from being sent twice (see [How sending works](#how-sending-works)).
+- **Slack:** each user connects their own workspace, and gets one alert when a limit is reached.
+- **Search:** Elasticsearch search as you type, with a MySQL fallback.
+- **Beyond the brief:** a Campaigns page with live progress, cancel and retry, and email and password sign-in next to Google.
+- **Production:** Docker images, HTTPS and CI.
+- **Tests:** 14 unit tests, 53 integration tests against real MySQL, Redis and Elasticsearch, and a 1,000-email load test.
+
+## Assignment requirements
+
+| Requirement                                     | Where                                                                                                                                                 |
+| ----------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| TypeScript + Express backend                    | `backend/src/app.ts`, `server.ts` (API), `worker.ts` (worker process)                                                                                 |
+| BullMQ + Redis, no cron                         | Delayed jobs per email, `backend/src/queue/queues.ts`. Recovery is event-driven: `queue/reconcile.ts` runs on worker start and on Redis reconnect     |
+| MySQL                                           | Prisma schema and migrations in `backend/prisma`                                                                                                      |
+| Ethereal SMTP                                   | `modules/emails/mailer.ts`, senders from `npm run seed:senders`                                                                                       |
+| Next.js + Tailwind dashboard matching the Figma | `frontend/src`: login, Scheduled/Sent tables, email view, Compose with CSV upload, start time, delay and hourly limit ([Dashboard](#dashboard))       |
+| Real Google OAuth                               | `modules/auth/google.ts`, authorization code + PKCE ([Google sign-in](#google-sign-in-setup))                                                         |
+| Persistence across restarts                     | Redis AOF + MySQL as source of truth + reconciliation ([Restarts and persistence](#restarts-and-persistence))                                         |
+| Idempotent sending                              | Deterministic job IDs, conditional claim, delivery marker, unique recipient per campaign, `Idempotency-Key` ([How sending works](#how-sending-works)) |
+| Configurable worker concurrency                 | `WORKER_CONCURRENCY`                                                                                                                                  |
+| Minimum delay between sends                     | `MIN_SEND_INTERVAL_MS` (2 s) per sender, plus each campaign's delay                                                                                   |
+| Hourly limit per sender, safe across instances  | Atomic Redis Lua script, `modules/rateLimit/rateLimiter.ts` ([Rate limiting](#rate-limiting-and-concurrency))                                         |
+| Over the limit → next window, in order          | Same script: moved to the first window with room, behind emails already waiting there                                                                 |
+| Slack: Connect Slack, alert when a limit is hit | `modules/slack`, notification queue ([Slack alerts](#slack-alerts)). Disconnect, reconnect and removed webhooks are handled                           |
+| Elasticsearch search                            | `modules/search/emailIndex.ts` ([Search](#search-elasticsearch))                                                                                      |
+| Live queue dashboard                            | Bull Board at `/admin/queues`, password protected                                                                                                     |
+| 1,000+ emails                                   | `npm run load-test -w backend`, also run in CI ([Behaviour under load](#rate-limiting-and-concurrency))                                               |
+| Docker                                          | `docker-compose.yml` (development), `docker-compose.prod.yml` + Dockerfiles ([Deployment](#deployment))                                               |
+
+## Architecture
+
+```mermaid
+flowchart LR
+  U[Browser] -->|HTTPS| C[Caddy]
+  C --> W[Next.js dashboard<br/>proxies /api and /admin/queues]
+  W --> A[Express API]
+  A -->|campaigns, emails| M[(MySQL<br/>source of truth)]
+  A -->|one delayed job per email| R[(Redis<br/>BullMQ + rate limits)]
+  A -->|search| E[(Elasticsearch)]
+  A -.->|sign-in| G[Google OAuth]
+  K[Worker processes] -->|due jobs| R
+  K -->|claim and record status| M
+  K -->|send| S[Ethereal SMTP]
+  K -->|index| E
+  K -.->|limit reached| SL[Slack webhook]
+```
+
+**One email's life:**
+
+1. **Compose** saves the campaign and one row per recipient in MySQL, with a planned send time for each.
+2. The API adds one BullMQ delayed job per row (`jobId = email-<id>`).
+3. When a job is due, a worker asks the Redis limiter for a slot.
+   - **Over a limit:** the email moves to the next window and becomes `delayed`, and a Slack alert is queued.
+   - **Otherwise:** the worker claims the row (`sending`), sends it through SMTP, and records `sent` with the Ethereal preview link.
+4. Every status change is indexed in Elasticsearch for search.
 
 ## Tech stack
 
@@ -59,7 +119,7 @@ npm run dev:worker   # BullMQ worker process
 npm run dev:web      # Dashboard on http://localhost:3000
 ```
 
-Open http://localhost:3000 and sign in with Google. To check the services: `curl http://localhost:4000/health` (reports MySQL, Redis and Elasticsearch).
+Open http://localhost:3000 and sign in with Google, or click "Create one" to use email and password. To check the services: `curl http://localhost:4000/health` (reports MySQL, Redis and Elasticsearch).
 
 The frontend proxies `/api/*` and `/admin/queues` to the backend (see `frontend/next.config.ts`), so the browser only talks to one origin.
 
@@ -161,10 +221,10 @@ MySQL is the source of truth. The schema lives in `backend/prisma/schema.prisma`
 
 | Table                | Purpose                                                                                                 |
 | -------------------- | ------------------------------------------------------------------------------------------------------- |
-| `users`              | Google accounts that have signed in                                                                     |
+| `users`              | Accounts: Google and/or email + password (scrypt hash)                                                  |
 | `senders`            | SMTP accounts emails are sent from (encrypted passwords)                                                |
 | `campaigns`          | One Compose submission: subject, body, start time, delay, hourly limit                                  |
-| `emails`             | One row per recipient, with status `scheduled → sending → sent/failed` (or `delayed` when rate-limited) |
+| `emails`             | One row per recipient: `scheduled → sending → sent/failed`, `delayed` when rate-limited, or `cancelled` |
 | `slack_integrations` | Per-user Slack webhook (encrypted) for rate-limit alerts                                                |
 
 Key constraints: `emails(campaign_id, recipient)` is unique, so a lead can't be scheduled twice in one campaign, and `campaigns(user_id, idempotency_key)` is unique, so a double-clicked Schedule creates one campaign.
@@ -227,7 +287,7 @@ The frontend follows the Figma (login, Scheduled and Sent lists, email view, Com
 
 **Lists (Scheduled, Sent)**
 
-- Search by recipient or subject, and filter by status (Scheduled / Delayed, or Sent / Failed). Search, filter and page are kept in the URL, so Back and shared links keep them.
+- Search by recipient or subject, and filter by status (Scheduled / Delayed, or Sent / Failed / Cancelled). Search, filter and page are kept in the URL, so Back and shared links keep them.
 - Refresh every 5 s while the tab is visible, plus a manual refresh button. The sidebar counts update the same way, with a red dot on Sent when something failed.
 - Each row shows a status pill (the scheduled time, _Delayed_ when a sending limit moved it, _Sending_, _Sent_ or _Failed_) and a relative time ("in 5 minutes", "2 hours ago"), with the exact time on hover.
 - Skeleton loading, empty states with a next step, error states with retry, and pagination.
@@ -444,20 +504,26 @@ Deployment notes:
 | `npm run db:studio -w backend`        | Opens Prisma Studio to browse the database                               |
 | `npm run seed:senders -w backend`     | Creates or updates the Ethereal senders                                  |
 
-Integration tests use their own database (`reachinbox_test`, created and migrated automatically) and Redis database 15, so they never touch development data. They cover cancelling and retrying (including the rate-limit place handed back), campaign progress, Slack (connect, state checks, test message, alerts, not connected, removed webhook, retries), search (as-you-type matching, per-user results, filters, MySQL fallback), Google sign-in (state and PKCE, callback errors, safe return paths, sessions, logout; only the call to Google's token endpoint is faked), the rate limiter (limits, spacing, order, 200 parallel reservations), duplicate-request handling, the send claim race, and job reconciliation.
+Integration tests use their own database (`reachinbox_test`, created and migrated automatically) and Redis database 15, so they never touch development data. They cover email and password sign-in (hashing, rate limits, account linking), cancelling and retrying (including the rate-limit place handed back), campaign progress, Slack (connect, state checks, test message, alerts, not connected, removed webhook, retries), search (as-you-type matching, per-user results, filters, MySQL fallback), Google sign-in (state and PKCE, callback errors, safe return paths, sessions, logout; only the call to Google's token endpoint is faked), the rate limiter (limits, spacing, order, 200 parallel reservations), duplicate-request handling, the send claim race, and job reconciliation.
 
-## Progress
+## Assumptions and trade-offs
 
-| #   | Phase                              | Status      |
-| --- | ---------------------------------- | ----------- |
-| 1   | Setup and infrastructure           | Done        |
-| 2   | Database and senders               | Done        |
-| 3   | Core scheduling API                | Done        |
-| 4   | Email worker and persistence       | Done        |
-| 5   | Rate limiting and concurrency      | Done        |
-| 6   | Google authentication              | Done        |
-| 7   | Frontend dashboard                 | Done        |
-| 8   | Slack and Elasticsearch            | Done        |
-| 9   | Documentation, demo and submission | In progress |
-| +   | Campaigns, cancel and retry        | Done        |
-| +   | Production deployment and CI       | Done        |
+**Assumptions**
+
+- **Ethereal is the mail server.** It accepts every email but delivers none; each message is viewed through its preview link. Ethereal keeps messages for a limited time, so old preview links can stop working.
+- **Senders are shared.** The seeded Ethereal senders are shared by all users. Their hourly cap counts every user's emails. The schema also supports private senders (`senders.user_id`), but there is no UI to add them.
+- **One message per campaign.** Subject and body are the same for every recipient; there is no per-recipient personalisation.
+- **Delay and hourly limit are per campaign.** The Compose delay is the gap between one campaign's emails. The sender's own 2 s minimum and its hourly cap still apply across campaigns.
+- **Fixed hour windows.** Hourly limits count clock-hour windows (10:00–11:00), the same windows the Compose preview uses.
+- **Time zones.** Times are stored in UTC and shown in the viewer's time zone.
+- **Recipient lists:** up to `MAX_RECIPIENTS_PER_CAMPAIGN` (10,000). Addresses are found in any column of a CSV or TXT file.
+- **Email sign-in has no address check or password reset.** The app can only send through Ethereal, so it can't email users. That is why a Google sign-in with the same address removes an unverified password.
+
+**Trade-offs**
+
+- **Planned and enforced limits.** Send times are planned when the campaign is saved, so the Scheduled list shows real times. The worker enforces the limits again at send time, because other campaigns share the sender.
+- **Own limiter instead of BullMQ's.** BullMQ's built-in limiter would pause the whole queue when one sender is at its cap. A small Redis Lua script gives each sender and campaign its own limits instead.
+- **Fixed windows, not sliding ones.** They are simpler to reason about and match the preview. The 2 s spacing still bounds bursts at window edges.
+- **Conservative counting.** An email counts against the limit when its slot is reserved, so a failed attempt still uses a place.
+- **Recovery without a timer.** Reconciliation runs when the worker starts and when Redis reconnects, not on a schedule, in line with "no cron".
+- **Elasticsearch is optional at runtime.** Indexing is a queue job with retries, and search falls back to MySQL, so an Elasticsearch outage never affects sending.
