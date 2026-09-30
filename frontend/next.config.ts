@@ -3,6 +3,9 @@ import type { NextConfig } from 'next';
 const backendUrl = process.env.BACKEND_URL ?? 'http://localhost:4000';
 
 const nextConfig: NextConfig = {
+  // The dev-mode "N" badge sits on top of the sidebar's Slack card.
+  // Build and runtime errors still show their overlay without it.
+  devIndicators: false,
   images: {
     // Google profile photos
     remotePatterns: [new URL('https://lh3.googleusercontent.com/**')],
