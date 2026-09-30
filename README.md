@@ -2,7 +2,7 @@
 
 A full-stack email scheduler: an Express + BullMQ backend that schedules and sends emails through Ethereal SMTP, and a Next.js dashboard to compose, schedule and track them.
 
-**Live demo:** https://outbox-scheduler.indiasouthcentral.cloudapp.azure.com. Create an account with email and password, or sign in with Google. Emails go to [Ethereal](https://ethereal.email), a test inbox, so nothing reaches real people. Each sent email links to its Ethereal preview.
+**Live demo:** https://netra-reachinbox.indiasouthcentral.cloudapp.azure.com. Create an account with email and password, or sign in with Google. Emails go to [Ethereal](https://ethereal.email), a test inbox, so nothing reaches real people. Each sent email links to its Ethereal preview.
 
 **Highlights**
 
