@@ -11,6 +11,8 @@ const envSchema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
   PORT: z.coerce.number().int().positive().default(4000),
   FRONTEND_URL: z.url().default('http://localhost:3000'),
+  // How many proxies in front of the API to trust for X-Forwarded-* headers.
+  TRUST_PROXY: z.coerce.number().int().min(0).default(1),
 
   DATABASE_URL: z.string().startsWith('mysql://'),
   DB_POOL_SIZE: z.coerce.number().int().min(1).default(10),
@@ -75,6 +77,17 @@ if (!parsed.success) {
     console.error(`  ${issue.path.join('.')}: ${issue.message}`);
   }
   process.exit(1);
+}
+
+// Settings that work but are unsafe or incomplete for a public deployment.
+if (parsed.data.NODE_ENV === 'production') {
+  const warnings = [
+    !parsed.data.FRONTEND_URL.startsWith('https://') &&
+      'FRONTEND_URL is not https: session cookies are sent without the Secure flag',
+    !parsed.data.GOOGLE_CLIENT_ID && 'GOOGLE_CLIENT_ID is not set: nobody can sign in',
+    parsed.data.SMTP_DRY_RUN && 'SMTP_DRY_RUN is on: no email is actually sent',
+  ].filter(Boolean);
+  for (const warning of warnings) console.warn(`Production config: ${warning}`);
 }
 
 export const env = {

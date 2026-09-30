@@ -1,0 +1,148 @@
+# Production stack: the app plus MySQL, Redis and Elasticsearch on one host.
+#
+#   cp .env.production.example .env.production   # then fill it in
+#   docker compose -f docker-compose.prod.yml --env-file .env.production up -d --build
+#
+# Only the web app is published (APP_PORT, default 3000). Put an HTTPS reverse
+# proxy (Caddy, nginx, a cloud load balancer) in front of it.
+name: reachinbox-prod
+
+x-backend: &backend
+  build:
+    context: .
+    dockerfile: backend/Dockerfile
+    target: runtime
+  image: reachinbox-backend:latest
+  restart: unless-stopped
+  env_file: .env.production
+  environment:
+    NODE_ENV: production
+    DATABASE_URL: mysql://${MYSQL_USER}:${MYSQL_PASSWORD}@mysql:3306/${MYSQL_DATABASE}
+    REDIS_URL: redis://redis:6379
+    ELASTICSEARCH_URL: http://elasticsearch:9200
+  depends_on:
+    migrate:
+      condition: service_completed_successfully
+    redis:
+      condition: service_healthy
+    elasticsearch:
+      condition: service_healthy
+
+services:
+  # Applies database migrations, then exits. The API and workers wait for it.
+  migrate:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+      target: tools
+    image: reachinbox-tools:latest
+    env_file: .env.production
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: mysql://${MYSQL_USER}:${MYSQL_PASSWORD}@mysql:3306/${MYSQL_DATABASE}
+      REDIS_URL: redis://redis:6379
+      ELASTICSEARCH_URL: http://elasticsearch:9200
+    depends_on:
+      mysql:
+        condition: service_healthy
+    restart: 'no'
+
+  api:
+    <<: *backend
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "fetch('http://localhost:4000/health').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))",
+        ]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  # Scale out with: docker compose ... up -d --scale worker=3
+  # Rate limits and idempotency are enforced in Redis/MySQL, so extra workers are safe.
+  worker:
+    <<: *backend
+    command: ['node', 'dist/worker.js']
+    stop_grace_period: 40s
+
+  web:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+      args:
+        BACKEND_URL: http://api:4000
+    image: reachinbox-web:latest
+    restart: unless-stopped
+    ports:
+      - '${APP_PORT:-3000}:3000'
+    depends_on:
+      api:
+        condition: service_healthy
+
+  mysql:
+    image: mysql:8.4
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?set MYSQL_ROOT_PASSWORD}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:?set MYSQL_DATABASE}
+      MYSQL_USER: ${MYSQL_USER:?set MYSQL_USER}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:?set MYSQL_PASSWORD}
+      TZ: UTC
+    volumes:
+      - mysql-data:/var/lib/mysql
+    healthcheck:
+      test: ['CMD-SHELL', 'mysqladmin ping -h 127.0.0.1 -u root -p"$$MYSQL_ROOT_PASSWORD"']
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    # AOF persistence so delayed jobs survive restarts; noeviction because
+    # BullMQ must never lose keys.
+    command:
+      [
+        'redis-server',
+        '--appendonly',
+        'yes',
+        '--appendfsync',
+        'everysec',
+        '--maxmemory-policy',
+        'noeviction',
+      ]
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  elasticsearch:
+    image: elasticsearch:8.17.0
+    restart: unless-stopped
+    environment:
+      discovery.type: single-node
+      # Reachable only on the internal Docker network, never published.
+      xpack.security.enabled: 'false'
+      ES_JAVA_OPTS: -Xms${ES_HEAP:-1g} -Xmx${ES_HEAP:-1g}
+      # Elasticsearch stops accepting writes when the disk is over 90% full
+      # (search then falls back to MySQL). Keep this on unless you know why.
+      cluster.routing.allocation.disk.threshold_enabled: ${ES_DISK_THRESHOLD:-true}
+    volumes:
+      - es-data:/usr/share/elasticsearch/data
+    healthcheck:
+      test: ['CMD-SHELL', 'curl -fs http://localhost:9200/_cluster/health || exit 1']
+      interval: 10s
+      timeout: 5s
+      retries: 30
+
+volumes:
+  mysql-data:
+  redis-data:
+  es-data:

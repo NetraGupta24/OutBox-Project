@@ -30,6 +30,13 @@ async function check(fn: () => Promise<unknown>): Promise<'up' | 'down'> {
 export function createApp() {
   const app = express();
   app.disable('x-powered-by');
+  // Behind a reverse proxy (Next.js, a load balancer): trust X-Forwarded-*.
+  app.set('trust proxy', env.TRUST_PROXY);
+  app.use((_req, res, next) => {
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+    next();
+  });
   app.use(express.json({ limit: '2mb' }));
   app.use(cookieParser());
 
